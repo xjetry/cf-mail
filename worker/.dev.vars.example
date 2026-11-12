@@ -1,0 +1,2 @@
+# 本地开发密钥：cp .dev.vars.example .dev.vars 后修改
+ADMIN_TOKEN=dev-token

@@ -1,0 +1,15 @@
+services:
+  cf-mail:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-dev-token}
+    volumes:
+      - cf-mail_state:/app/worker/.wrangler
+    restart: unless-stopped
+
+volumes:
+  cf-mail_state:

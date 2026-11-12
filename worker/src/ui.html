@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cf-mail 转发规则管理</title>
+    <style>
+      :root {
+        --bg: #0f1420;
+        --card: #171e2e;
+        --border: #263049;
+        --text: #e6ebf5;
+        --muted: #8b96ad;
+        --accent: #4f8cff;
+        --danger: #ff6b6b;
+        --ok: #3ddc97;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+        z-index: 10;
+      }
+      h1 { font-size: 18px; margin: 0; }
+      h1 .at { color: var(--accent); }
+      main { max-width: 960px; margin: 0 auto; padding: 24px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+      .card h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); font-weight: 600; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input, select {
+        width: 100%;
+        padding: 9px 12px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font-size: 14px;
+        outline: none;
+      }
+      input:focus, select:focus { border-color: var(--accent); }
+      .input-suffix {
+        display: flex;
+        align-items: stretch;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        overflow: hidden;
+      }
+      .input-suffix:focus-within { border-color: var(--accent); }
+      .input-suffix input {
+        border: none;
+        border-radius: 0;
+        flex: 1;
+        min-width: 0;
+      }
+      .input-suffix .suffix {
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        background: #1d263b;
+        border-left: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+        user-select: none;
+      }
+      .row { display: flex; gap: 12px; }
+      .row > * { flex: 1; }
+      button {
+        padding: 8px 15px;
+        border-radius: 7px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+      button.small { padding: 4px 10px; font-size: 12px; }
+      button.danger { background: transparent; border: 1px solid var(--border); color: var(--danger); padding: 4px 10px; font-size: 12px; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+      th { color: var(--muted); font-size: 12px; font-weight: 600; }
+      td.dests { color: var(--muted); font-size: 13px; }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 9px;
+        border-radius: 99px;
+        font-size: 12px;
+        border: 1px solid var(--border);
+        color: var(--text);
+        margin: 2px 6px 2px 0;
+      }
+      .badge.ok { color: var(--ok); border-color: var(--ok); }
+      .badge.rej { color: var(--danger); border-color: var(--danger); }
+      .target-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 4px 10px;
+        border-radius: 99px;
+        font-size: 12px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        margin: 2px 6px 2px 0;
+        cursor: pointer;
+        user-select: none;
+        transition: all 0.15s;
+      }
+      .target-chip:hover { border-color: var(--accent); }
+      .target-chip.on { border-color: rgba(61, 220, 151, 0.5); }
+      .target-chip.off {
+        opacity: 0.5;
+        color: var(--muted);
+        text-decoration: line-through;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+      }
+      .dot.on { background: var(--ok); box-shadow: 0 0 6px rgba(61, 220, 151, 0.6); }
+      .dot.off { background: var(--muted); }
+      .actions-cell { white-space: nowrap; text-align: right; }
+      .actions-cell button + button { margin-left: 6px; }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }
+      .toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+        justify-content: flex-end;
+        min-width: 260px;
+      }
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+        font-size: 12px;
+        color: var(--muted);
+        flex-wrap: wrap;
+      }
+      .pagination-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .pagination select {
+        width: auto;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+
+      /* Modal */
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(6, 9, 15, 0.72);
+        backdrop-filter: blur(3px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 30;
+        padding: 16px;
+      }
+      .modal-backdrop.open { display: flex; }
+      .modal {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        width: 100%;
+        max-width: 520px;
+        padding: 22px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      }
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+      .modal-header h3 { margin: 0; font-size: 16px; }
+      .target-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .target-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+      }
+      .target-row .addr-text {
+        flex: 1;
+        font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .target-row.off .addr-text {
+        color: var(--muted);
+        text-decoration: line-through;
+      }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 36px;
+        height: 20px;
+        flex-shrink: 0;
+        margin: 0;
+      }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background-color: #2b3550;
+        transition: 0.2s;
+        border-radius: 20px;
+      }
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: #fff;
+        transition: 0.2s;
+        border-radius: 50%;
+      }
+      .switch input:checked + .slider { background-color: var(--ok); }
+      .switch input:checked + .slider:before { transform: translateX(16px); }
+
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(80px);
+        background: var(--card);
+        border: 1px solid var(--border);
+        padding: 10px 18px;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: transform 0.25s;
+        z-index: 50;
+      }
+      .toast.show { transform: translateX(-50%) translateY(0); }
+      .toast.err { border-color: var(--danger); }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+      #gate { display: flex; justify-content: center; padding-top: 15vh; }
+      #gate .card { width: 360px; }
+      #ui { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="gate">
+      <div class="card">
+        <h2>访问令牌</h2>
+        <label for="token">Bearer Token</label>
+        <input id="token" type="password" placeholder="ADMIN_TOKEN" />
+        <div class="hint">保存在本地 localStorage，仅发送到当前 Worker。</div>
+        <div style="margin-top: 14px; display: flex; gap: 10px">
+          <button id="login">进入</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="ui">
+      <header>
+        <h1>cf-mail <span class="at">转发规则</span></h1>
+        <div style="display: flex; gap: 10px; align-items: center">
+          <button class="secondary" id="refresh">刷新</button>
+          <button class="secondary" id="logout">退出</button>
+        </div>
+      </header>
+      <main>
+        <div class="card">
+          <div class="toolbar">
+            <h2 style="margin: 0">
+              规则列表
+              <span id="rule-count" style="font-weight: 400; font-size: 12px; color: var(--muted)"></span>
+              <span style="font-weight: 400; font-size: 12px; color: var(--muted)">（点击目标胶囊可切换启用/暂停）</span>
+            </h2>
+            <div class="toolbar-right">
+              <input
+                id="rule-search"
+                type="search"
+                placeholder="搜索收件地址或目标邮箱…"
+                autocomplete="off"
+                style="max-width: 260px; padding: 7px 12px; font-size: 13px"
+              />
+              <button id="open-add-modal">+ 新增规则</button>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>收件地址</th>
+                <th>转发目标（绿点=启用，灰线=暂停）</th>
+                <th>更新时间</th>
+                <th style="text-align: right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="rules"></tbody>
+          </table>
+          <div class="pagination" id="rules-pagination">
+            <div>
+              <span id="page-summary">共 0 条</span>
+            </div>
+            <div class="pagination-controls">
+              <label for="page-size" style="margin: 0; display: inline">每页</label>
+              <select id="page-size">
+                <option value="10" selected>10 条</option>
+                <option value="20">20 条</option>
+                <option value="50">50 条</option>
+              </select>
+              <button class="secondary small" id="page-prev">上一页</button>
+              <span id="page-indicator">1 / 1</span>
+              <button class="secondary small" id="page-next">下一页</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>最近投递</h2>
+          <table>
+            <thead>
+              <tr><th>时间</th><th>发件人 → 收件人</th><th>主题</th><th>结果</th></tr>
+            </thead>
+            <tbody id="logs"></tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+
+    <!-- 新增 / 编辑规则 Modal -->
+    <div class="modal-backdrop" id="rule-modal">
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <h3 id="modal-title">新增转发规则</h3>
+          <button class="secondary small" id="modal-close">关闭</button>
+        </div>
+        <div>
+          <label for="modal-addr">收件地址前缀（后缀自动补全）</label>
+          <div class="input-suffix">
+            <input id="modal-addr" placeholder="hello" autocomplete="off" />
+            <span class="suffix" id="modal-domain-suffix">@example.com</span>
+          </div>
+        </div>
+        <div style="margin-top: 14px">
+          <label>目标地址列表（可独立开关或移除）</label>
+          <div class="target-list" id="modal-target-list"></div>
+          <div style="display: flex; gap: 8px; margin-top: 10px">
+            <input
+              id="modal-new-target"
+              placeholder="输入目标邮箱（如 me@gmail.com，支持逗号分隔多个）回车或点添加"
+              autocomplete="off"
+            />
+            <button class="secondary" id="modal-add-target">添加目标</button>
+          </div>
+        </div>
+        <div style="margin-top: 18px; display: flex; justify-content: flex-end; gap: 10px">
+          <button class="secondary" id="modal-cancel">取消</button>
+          <button id="modal-save">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      let token = localStorage.getItem("cfm_token") ?? "";
+      let mailDomain = "example.com";
+      let allRules = [];
+      let currentPage = 1;
+      let pageSize = 10;
+      let modalMode = "add"; // "add" | "edit"
+      let editingOriginalAddress = "";
+      let editingTargets = [];
+      const $ = (id) => document.getElementById(id);
+
+      function escapeHtml(str) {
+        return String(str ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function toast(msg, err = false) {
+        const t = $("toast");
+        t.textContent = msg;
+        t.className = "toast show" + (err ? " err" : "");
+        setTimeout(() => (t.className = "toast"), 2200);
+      }
+
+      function normalizePrefixInput(val) {
+        const v = val.trim().toLowerCase();
+        if (!v) return "";
+        const suffix = "@" + mailDomain;
+        if (v.endsWith(suffix)) return v;
+        if (v.includes("@")) return v;
+        return v + suffix;
+      }
+
+      function stripDomainSuffix(addr) {
+        const v = String(addr ?? "").trim().toLowerCase();
+        const suffix = "@" + mailDomain;
+        return v.endsWith(suffix) ? v.slice(0, -suffix.length) : v;
+      }
+
+      function updateDomainLabels(domain) {
+        if (!domain) return;
+        mailDomain = domain;
+        $("modal-domain-suffix").textContent = "@" + mailDomain;
+      }
+
+      async function api(path, opts = {}) {
+        const res = await fetch(path, {
+          ...opts,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+            ...(opts.headers ?? {}),
+          },
+        });
+        if (res.status === 401) { showGate(); throw new Error("unauthorized"); }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? res.status);
+        return data;
+      }
+
+      function showGate() {
+        $("gate").style.display = "flex";
+        $("ui").style.display = "none";
+      }
+      function showUi() {
+        $("gate").style.display = "none";
+        $("ui").style.display = "block";
+      }
+
+      async function login() {
+        token = $("token").value.trim();
+        try {
+          await api("/admin/api/rules");
+          localStorage.setItem("cfm_token", token);
+          showUi();
+          await loadAll();
+          toast("已连接");
+        } catch {
+          toast("令牌无效", true);
+        }
+      }
+
+      function getRuleTargets(r) {
+        if (Array.isArray(r.targets) && r.targets.length > 0) {
+          return r.targets.map((t) => ({ address: t.address, enabled: t.enabled !== false }));
+        }
+        return (r.destinations ?? []).map((d) => ({ address: d, enabled: true }));
+      }
+
+      async function toggleTarget(address, targetAddress, enabled) {
+        try {
+          await api("/admin/api/rules/" + encodeURIComponent(address) + "/targets", {
+            method: "PATCH",
+            body: JSON.stringify({ target: targetAddress, enabled }),
+          });
+          toast(`${targetAddress} 已${enabled ? "启用" : "暂停"}`);
+          await loadRules();
+        } catch (e) {
+          toast(String(e.message), true);
+        }
+      }
+
+      function renderRules() {
+        const q = ($("rule-search")?.value ?? "").trim().toLowerCase();
+        const filtered = !q
+          ? allRules
+          : allRules.filter((r) => {
+              if (String(r.address ?? "").toLowerCase().includes(q)) return true;
+              const targets = getRuleTargets(r);
+              return targets.some((t) => String(t.address ?? "").toLowerCase().includes(q));
+            });
+
+        const total = filtered.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (currentPage > totalPages) currentPage = totalPages;
+        if (currentPage < 1) currentPage = 1;
+
+        const startIdx = (currentPage - 1) * pageSize;
+        const pageItems = filtered.slice(startIdx, startIdx + pageSize);
+
+        const countEl = $("rule-count");
+        if (countEl) {
+          countEl.textContent = q
+            ? `(匹配 ${total} / 共 ${allRules.length})`
+            : `(${allRules.length})`;
+        }
+
+        $("page-summary").textContent =
+          total === 0
+            ? "共 0 条"
+            : `显示第 ${startIdx + 1}–${Math.min(startIdx + pageSize, total)} 条，共 ${total} 条`;
+        $("page-indicator").textContent = `${currentPage} / ${totalPages}`;
+        $("page-prev").disabled = currentPage <= 1;
+        $("page-next").disabled = currentPage >= totalPages;
+
+        const tbody = $("rules");
+        tbody.innerHTML = "";
+        if (pageItems.length === 0) {
+          const tr = document.createElement("tr");
+          const td = document.createElement("td");
+          td.colSpan = 4;
+          td.className = "dests";
+          td.style.textAlign = "center";
+          td.style.padding = "18px 8px";
+          td.textContent = q ? `未找到匹配 "${$("rule-search").value.trim()}" 的规则` : "暂无转发规则，点击右上角「+ 新增规则」创建";
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        for (const r of pageItems) {
+          const tr = document.createElement("tr");
+          const tdAddr = document.createElement("td");
+          tdAddr.textContent = r.address;
+
+          const tdDests = document.createElement("td");
+          tdDests.className = "dests";
+          const targets = getRuleTargets(r);
+          for (const t of targets) {
+            const chip = document.createElement("span");
+            chip.className = "target-chip " + (t.enabled ? "on" : "off");
+            chip.title = t.enabled ? "点击暂停转发到此目标" : "点击恢复转发到此目标";
+            chip.innerHTML = `<span class="dot ${t.enabled ? "on" : "off"}"></span><span>${escapeHtml(t.address)}</span>`;
+            chip.onclick = () => toggleTarget(r.address, t.address, !t.enabled);
+            tdDests.appendChild(chip);
+          }
+
+          const tdTime = document.createElement("td");
+          tdTime.className = "dests";
+          tdTime.textContent = new Date(r.updatedAt).toLocaleString();
+
+          const tdAct = document.createElement("td");
+          tdAct.className = "actions-cell";
+
+          const editBtn = document.createElement("button");
+          editBtn.className = "secondary small";
+          editBtn.textContent = "编辑";
+          editBtn.onclick = () => openEditModal(r);
+
+          const delBtn = document.createElement("button");
+          delBtn.className = "danger";
+          delBtn.textContent = "删除";
+          delBtn.onclick = async () => {
+            if (!confirm(`删除规则 ${r.address}?`)) return;
+            try {
+              await api("/admin/api/rules/" + encodeURIComponent(r.address), { method: "DELETE" });
+              toast("已删除");
+              await loadRules();
+            } catch (e) { toast(String(e.message), true); }
+          };
+
+          tdAct.appendChild(editBtn);
+          tdAct.appendChild(delBtn);
+
+          tr.appendChild(tdAddr);
+          tr.appendChild(tdDests);
+          tr.appendChild(tdTime);
+          tr.appendChild(tdAct);
+          tbody.appendChild(tr);
+        }
+      }
+
+      async function loadRules() {
+        const data = await api("/admin/api/rules");
+        if (data.domain) updateDomainLabels(data.domain);
+        allRules = data.rules ?? [];
+        renderRules();
+      }
+
+      function renderModalTargets() {
+        const list = $("modal-target-list");
+        list.innerHTML = "";
+        if (editingTargets.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "hint";
+          empty.textContent = "请添加至少一个目标邮箱（也可直接在下方输入框填入后点击保存）。";
+          list.appendChild(empty);
+          return;
+        }
+        editingTargets.forEach((t, idx) => {
+          const row = document.createElement("div");
+          row.className = "target-row" + (t.enabled ? "" : " off");
+
+          const labelSwitch = document.createElement("label");
+          labelSwitch.className = "switch";
+          labelSwitch.title = t.enabled ? "已启用" : "已暂停";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = t.enabled;
+          checkbox.onchange = () => {
+            editingTargets[idx].enabled = checkbox.checked;
+            renderModalTargets();
+          };
+          const slider = document.createElement("span");
+          slider.className = "slider";
+          labelSwitch.appendChild(checkbox);
+          labelSwitch.appendChild(slider);
+
+          const addrSpan = document.createElement("span");
+          addrSpan.className = "addr-text";
+          addrSpan.textContent = t.address;
+
+          const removeBtn = document.createElement("button");
+          removeBtn.className = "danger";
+          removeBtn.textContent = "移除";
+          removeBtn.onclick = () => {
+            editingTargets.splice(idx, 1);
+            renderModalTargets();
+          };
+
+          row.appendChild(labelSwitch);
+          row.appendChild(addrSpan);
+          row.appendChild(removeBtn);
+          list.appendChild(row);
+        });
+      }
+
+      function openAddModal() {
+        modalMode = "add";
+        editingOriginalAddress = "";
+        $("modal-title").textContent = "新增转发规则";
+        $("modal-save").textContent = "添加规则";
+        $("modal-addr").value = "";
+        editingTargets = [];
+        $("modal-new-target").value = "";
+        renderModalTargets();
+        $("rule-modal").classList.add("open");
+        $("modal-addr").focus();
+      }
+
+      function openEditModal(rule) {
+        modalMode = "edit";
+        editingOriginalAddress = rule.address;
+        $("modal-title").textContent = "编辑转发规则";
+        $("modal-save").textContent = "保存修改";
+        $("modal-addr").value = stripDomainSuffix(rule.address);
+        editingTargets = getRuleTargets(rule).map((t) => ({ ...t }));
+        $("modal-new-target").value = "";
+        renderModalTargets();
+        $("rule-modal").classList.add("open");
+        $("modal-addr").focus();
+      }
+
+      function closeModal() {
+        $("rule-modal").classList.remove("open");
+      }
+
+      function addTargetsToModal() {
+        const raw = $("modal-new-target").value;
+        const parts = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+        if (parts.length === 0) return;
+        for (const p of parts) {
+          if (!editingTargets.some((t) => t.address === p)) {
+            editingTargets.push({ address: p, enabled: true });
+          }
+        }
+        $("modal-new-target").value = "";
+        renderModalTargets();
+      }
+
+      async function saveModal() {
+        if ($("modal-new-target").value.trim()) {
+          addTargetsToModal();
+        }
+        const newAddress = normalizePrefixInput($("modal-addr").value);
+        if (!newAddress || editingTargets.length === 0) {
+          return toast("请填写收件地址前缀并添加至少一个目标邮箱", true);
+        }
+        const targetUrlAddr = modalMode === "edit" ? editingOriginalAddress : newAddress;
+        try {
+          await api("/admin/api/rules/" + encodeURIComponent(targetUrlAddr), {
+            method: "PUT",
+            body: JSON.stringify({
+              address: newAddress,
+              targets: editingTargets,
+            }),
+          });
+          closeModal();
+          toast(modalMode === "edit" ? "规则已更新" : "规则已添加，立即生效");
+          await loadRules();
+        } catch (e) {
+          toast(String(e.message), true);
+        }
+      }
+
+      async function loadLogs() {
+        const { logs } = await api("/admin/api/logs?limit=50");
+        const tbody = $("logs");
+        tbody.innerHTML = "";
+        for (const l of logs) {
+          const tr = document.createElement("tr");
+          const time = new Date(l.ts).toLocaleString();
+          const result = l.rejected
+            ? `<span class="badge rej">rejected${l.reason ? ": " + escapeHtml(l.reason) : ""}</span>`
+            : l.forwardedTo.map((d) => `<span class="badge ok">${escapeHtml(d)}</span>`).join("");
+          const subject = escapeHtml((l.subject ?? "").slice(0, 60));
+          tr.innerHTML = `<td class="dests">${escapeHtml(time)}</td><td>${escapeHtml(l.from)} → ${escapeHtml(l.to)}</td><td>${subject}</td><td>${result}</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+
+      async function loadAll() {
+        await Promise.all([loadRules(), loadLogs()]).catch(() => {});
+      }
+
+      $("login").onclick = login;
+      $("token").addEventListener("keydown", (e) => e.key === "Enter" && login());
+      $("open-add-modal").onclick = openAddModal;
+      $("rule-search").addEventListener("input", () => {
+        currentPage = 1;
+        renderRules();
+      });
+      $("page-size").addEventListener("change", (e) => {
+        pageSize = Number(e.target.value) || 10;
+        currentPage = 1;
+        renderRules();
+      });
+      $("page-prev").onclick = () => {
+        if (currentPage > 1) {
+          currentPage--;
+          renderRules();
+        }
+      };
+      $("page-next").onclick = () => {
+        currentPage++;
+        renderRules();
+      };
+      $("refresh").onclick = () => loadAll().then(() => toast("已刷新"));
+      $("logout").onclick = () => { localStorage.removeItem("cfm_token"); token = ""; showGate(); };
+
+      $("modal-close").onclick = closeModal;
+      $("modal-cancel").onclick = closeModal;
+      $("modal-save").onclick = saveModal;
+      $("modal-add-target").onclick = addTargetsToModal;
+      $("modal-new-target").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); addTargetsToModal(); }
+      });
+      $("rule-modal").addEventListener("click", (e) => {
+        if (e.target === $("rule-modal")) closeModal();
+      });
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && $("rule-modal").classList.contains("open")) closeModal();
+      });
+
+      if (token) {
+        api("/admin/api/rules").then(showUi).then(loadAll).catch(() => {});
+      }
+    </script>
+  </body>
+</html>

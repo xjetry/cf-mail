@@ -1,0 +1,15 @@
+{
+  "name": "cf-mail",
+  "private": true,
+  "workspaces": [
+    "worker",
+    "cli"
+  ],
+  "scripts": {
+    "build": "npm run build -w cli && npm run typecheck -w worker",
+    "dev": "npm run dev -w worker",
+    "check-token": "npm run build -w cli --silent && node scripts/deploy.mjs --check-only",
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "cfm": "node cli/dist/index.js"
+  }
+}

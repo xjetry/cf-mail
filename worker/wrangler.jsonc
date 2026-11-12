@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-mail",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-12",
+  "vars": {
+    "MAIL_DOMAIN": "example.com"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.html"],
+      "fallthrough": true
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FORWARD_STORE",
+        "class_name": "ForwardStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ForwardStore"]
+    }
+  ]
+}

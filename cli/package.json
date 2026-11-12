@@ -1,0 +1,23 @@
+{
+  "name": "cfm",
+  "version": "0.1.0",
+  "description": "cf-mail admin CLI & MCP server",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cfm": "./dist/index.js",
+    "cfmctl": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
+  }
+}
