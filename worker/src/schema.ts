@@ -1,15 +1,13 @@
 /**
  * cf-mail 统一契约（Single Source of Truth）：
- * - Worker 管理 API 路由表、请求/响应类型说明
+ * - Worker 管理 API 与公开单邮箱 API 路由表、请求/响应类型说明
  * - CLI (cfm / cfmctl) 命令定义、参数、对应 API 与 Agent 约束
- * - scripts/gen-skill.mjs 与 `/admin/schema`、CLI `schema` 命令均直接读取此模块，
- *   确保 API 变更时 CLI 帮助、运行时自省 Schema 与 skills/cf-mail/SKILL.md 100% 自动同步。
  */
 
 export type ApiEndpointSpec = {
-  method: "GET" | "PUT" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
-  auth: boolean;
+  auth: boolean | "inboxKey";
   summary: string;
   requestBody?: string;
   responseBody: string;
@@ -31,9 +29,32 @@ export const DATA_MODELS_SPEC = {
   },
   ForwardRule: {
     address: "string (收件地址，如 test@example.com；输入前缀自动补全 @<MAIL_DOMAIN>)",
-    destinations: "string[] (全部目标邮箱地址列表)",
+    destinations: "string[] (全部目标邮箱地址列表；inboxEnabled=true 时允许为空数组 [])",
     targets: "DestinationTarget[] (带独立启用开关状态的目标邮箱列表)",
+    inboxEnabled: "boolean? (是否开启临时收件箱暂存，支持不转发仅收件箱模式)",
+    allowedSenders: "string[]? (可选发件人域名/邮箱白名单，如 ['anthropic.com'] 匹配其自身及子域)",
+    inboxKey: "string? (该前缀专属收件箱查询凭证 cfmk_<32hex>)",
     updatedAt: "string (ISO-8601 更新时间)",
+  },
+  InboxMessage: {
+    id: "string (UUID)",
+    ts: "string (ISO-8601 到达时间)",
+    expiresAt: "number (epoch ms，默认到达后 30 分钟过期清理)",
+    read: "boolean (是否已被消费/标记已读)",
+    readAt: "string? (ISO-8601 已读时间)",
+    from: "string (发件人)",
+    to: "string (收件地址)",
+    subject: "string (已解码 RFC 2047 UTF-8 主题)",
+    messageId: "string",
+    text: "string (纯文本正文)",
+    links: "string[] (提取出的 https 链接，已反转义 &amp;，claude.ai 链接优先排在最前)",
+    codes: "string[] (提取出的 6 位数字验证码)",
+  },
+  WatchSlot: {
+    address: "string (临时监听收件地址)",
+    createdAt: "string (ISO-8601)",
+    expiresAt: "number (epoch ms)",
+    allowedSenders: "string[]?",
   },
   DeliveryLogEntry: {
     id: "string (UUID)",
@@ -42,13 +63,46 @@ export const DATA_MODELS_SPEC = {
     to: "string (收件地址)",
     subject: "string (已自动解码 RFC 2047 UTF-8 的邮件主题)",
     messageId: "string",
-    forwardedTo: "string[] (实际成功转发的目标列表)",
-    rejected: "boolean? (是否拒信)",
-    reason: "string? (拒信或部分失败原因：no rule / all destinations disabled / 错误详情)",
+    forwardedTo: "string[] (实际成功投递目标列表，含 '[inbox]')",
+    rejected: "boolean? (是否拒信：无规则 / 发件人不在白名单 / 目标全部暂停 / 全部目标转发失败)",
+    reason: "string? (拒信或部分失败原因)",
+  },
+  DestinationVerification: {
+    address: "string (目标邮箱地址，小写)",
+    status:
+      '"verified" | "pending" | "missing" | "unknown"（verified=已验证可转发；pending=已添加未验证；missing=未添加到 Cloudflare；unknown=未配置 CF API）',
+    verifiedAt: "string? (ISO-8601 验证通过时间)",
+    message: "string? (状态提示或检查错误详情)",
+  },
+  DestinationCheckResult: {
+    configured: "boolean (Worker 是否已配置 CLOUDFLARE_API_TOKEN / CF_ACCOUNT_ID)",
+    destinations: "DestinationVerification[]",
   },
 } as const;
 
 export const API_ENDPOINTS_SPEC: ApiEndpointSpec[] = [
+  {
+    method: "GET",
+    path: "/api/inbox?unread=1&consume=1&since=<ms>&limit=10",
+    auth: "inboxKey",
+    summary:
+      "【用户侧公开单邮箱接口】持单前缀专属 cfmk_xxx（Bearer 或 ?key=）轮询该邮箱临时收件箱；consume=1 返回同时原子标记已读防重复消费旧链接",
+    responseBody: "{ address: string, messages: InboxMessage[] }",
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/:id/ack",
+    auth: "inboxKey",
+    summary: "【用户侧公开单邮箱接口】显式标记某封邮件已读",
+    responseBody: "{ ok: true }",
+  },
+  {
+    method: "DELETE",
+    path: "/api/inbox/:id",
+    auth: "inboxKey",
+    summary: "【用户侧公开单邮箱接口】删除本邮箱下的指定临时邮件",
+    responseBody: "{ ok: true }",
+  },
   {
     method: "GET",
     path: "/admin/healthz",
@@ -67,24 +121,84 @@ export const API_ENDPOINTS_SPEC: ApiEndpointSpec[] = [
     method: "GET",
     path: "/admin/api/rules",
     auth: true,
-    summary: "获取当前邮件域名与全部转发规则列表",
+    summary: "获取当前邮件域名与全部转发/收件箱规则列表",
     responseBody: "{ domain: string, rules: ForwardRule[] }",
   },
   {
     method: "GET",
     path: "/admin/api/rules/:address",
     auth: true,
-    summary: "获取单条转发规则（:address 支持完整邮箱或仅传前缀）",
+    summary: "获取单条规则（:address 支持完整邮箱或仅传前缀）",
     responseBody: "{ rule: ForwardRule }",
   },
   {
     method: "PUT",
     path: "/admin/api/rules/:address",
     auth: true,
-    summary: "新增或覆盖转发规则（若传入 body.address 与 :address 不同则自动迁移改名）",
+    summary:
+      "新增或覆盖规则（支持 inboxEnabled=true 无转发目标模式、allowedSenders 发件人白名单及自动生成 inboxKey）",
     requestBody:
-      "{ address?: string, destinations?: string[], targets?: Array<{ address: string, enabled?: boolean }> }",
+      "{ address?: string, destinations?: string[], targets?: Array<{ address: string, enabled?: boolean }>, inboxEnabled?: boolean, allowedSenders?: string[], generateKey?: boolean }",
+    responseBody: "{ rule: ForwardRule, verification: DestinationCheckResult }",
+  },
+  {
+    method: "POST",
+    path: "/admin/api/rules/:address/inbox-key",
+    auth: true,
+    summary: "生成或轮换重置指定前缀的独立收件箱 Key（旧 Key 立即失效）",
+    responseBody: "{ rule: ForwardRule, inboxKey: string }",
+  },
+  {
+    method: "DELETE",
+    path: "/admin/api/rules/:address/inbox-key",
+    auth: true,
+    summary: "吊销指定前缀的独立收件箱 Key",
     responseBody: "{ rule: ForwardRule }",
+  },
+  {
+    method: "POST",
+    path: "/admin/api/inbox/watch",
+    auth: true,
+    summary: "开启一次性临时收件监听槽位（默认 TTL 1800s，无规则地址在监听期内免拒信入库）",
+    requestBody: "{ address: string, ttlSeconds?: number, allowedSenders?: string[] }",
+    responseBody: "{ watch: WatchSlot }",
+  },
+  {
+    method: "DELETE",
+    path: "/admin/api/inbox/watch/:address",
+    auth: true,
+    summary: "提前关闭临时收件监听槽位",
+    responseBody: "{ ok: boolean }",
+  },
+  {
+    method: "GET",
+    path: "/admin/api/inbox?to=<addr>&unread=1&consume=1&since=<ms>&limit=20",
+    auth: true,
+    summary: "管理员查询全局或指定收件地址的临时收件箱邮件",
+    responseBody: "{ messages: InboxMessage[] }",
+  },
+  {
+    method: "DELETE",
+    path: "/admin/api/inbox/:id",
+    auth: true,
+    summary: "管理员删除指定临时收件箱邮件",
+    responseBody: "{ ok: true }",
+  },
+  {
+    method: "GET",
+    path: "/admin/api/destinations/status?addresses=a@x.com,b@y.com",
+    auth: true,
+    summary: "批量检查目标邮箱在 Cloudflare Email Routing 的验证状态",
+    responseBody: "DestinationCheckResult",
+  },
+  {
+    method: "POST",
+    path: "/admin/api/destinations/verify",
+    auth: true,
+    summary: "为目标邮箱发送/重发 Cloudflare 验证邮件",
+    requestBody: "{ address: string }",
+    responseBody:
+      "{ destination: DestinationVerification, action: 'sent' | 'resent' | 'already_verified', message: string }",
   },
   {
     method: "PATCH",
@@ -98,7 +212,7 @@ export const API_ENDPOINTS_SPEC: ApiEndpointSpec[] = [
     method: "DELETE",
     path: "/admin/api/rules/:address",
     auth: true,
-    summary: "删除指定收件地址的转发规则",
+    summary: "删除指定收件地址的规则（同时作废其独立 inboxKey）",
     responseBody: "{ ok: true }",
   },
   {
@@ -128,28 +242,64 @@ export const CLI_COMMANDS_SPEC: CliCommandSpec[] = [
   {
     command: "list",
     args: "",
-    summary: "列出全部转发规则（暂停的目标标注 (off)）",
+    summary: "列出全部规则（标注 [inbox]、发件人白名单及暂停目标）",
     api: "GET /admin/api/rules",
     examples: ["cfmctl list"],
   },
   {
     command: "get",
     args: "<address>",
-    summary: "查看单条规则详情 JSON（address 可只写前缀，如 test）",
+    summary: "查看单条规则详情 JSON（含 inboxKey）",
     api: "GET /admin/api/rules/:address",
     examples: ["cfmctl get test"],
   },
   {
     command: "set",
-    args: "<address> <dest...>",
-    summary: "新增或覆盖规则（多目标用空格分隔；目标前加 - 表示初始为暂停状态）",
+    args: "<address> [--inbox] [--allow-from d1,d2] [dest...]",
+    summary:
+      "新增或覆盖规则（支持 --inbox 创建零转发目标的纯收件箱规则并生成独立 Key）",
     api: "PUT /admin/api/rules/:address",
     examples: [
+      "cfmctl set claude01 --inbox --allow-from anthropic.com",
       "cfmctl set test me@gmail.com backup@outlook.com",
-      "cfmctl set test me@gmail.com -paused@outlook.com",
     ],
     agentNotes:
-      "set 是全量覆盖语义！如果要向已有规则追加新目标，必须先执行 get 读取现有 targets（保留暂停目标的 - 前缀），合并后再执行 set。",
+      "set 是全量覆盖语义！若要向已有规则追加目标或修改白名单，先执行 get 读取现有配置合并后再 set。",
+  },
+  {
+    command: "key",
+    args: "<address> [--rotate | --revoke]",
+    summary: "查看、轮换重置（--rotate）或吊销（--revoke）指定前缀的独立收件箱 Key",
+    api: "POST /admin/api/rules/:address/inbox-key",
+    examples: [
+      "cfmctl key claude01",
+      "cfmctl key claude01 --rotate",
+      "cfmctl key claude01 --revoke",
+    ],
+  },
+  {
+    command: "inbox",
+    args: "[address] [--unread] [--consume] [--json]",
+    summary: "查看临时收件箱邮件（含自动提取的 Magic-Link 与验证码）",
+    api: "GET /admin/api/inbox",
+    examples: [
+      "cfmctl inbox claude01 --unread --consume",
+      "cfmctl inbox",
+    ],
+  },
+  {
+    command: "watch",
+    args: "<address> [--ttl SECONDS] [--allow-from d1,d2]",
+    summary: "开启一次性临时收件监听槽位（默认 1800 秒）",
+    api: "POST /admin/api/inbox/watch",
+    examples: ["cfmctl watch temp01 --allow-from anthropic.com"],
+  },
+  {
+    command: "unwatch",
+    args: "<address>",
+    summary: "关闭临时收件监听槽位",
+    api: "DELETE /admin/api/inbox/watch/:address",
+    examples: ["cfmctl unwatch temp01"],
   },
   {
     command: "enable",
@@ -161,16 +311,14 @@ export const CLI_COMMANDS_SPEC: CliCommandSpec[] = [
   {
     command: "disable",
     args: "<address> <dest>",
-    summary: "临时暂停某条规则下的指定目标邮箱（保留在规则中，仅停止向其转发）",
+    summary: "临时暂停某条规则下的指定目标邮箱",
     api: "PATCH /admin/api/rules/:address/targets",
     examples: ["cfmctl disable test backup@outlook.com"],
-    agentNotes:
-      "当用户要求临时关闭/暂停某个转发目标时，优先使用 disable 而不是重新 set 或 delete。",
   },
   {
     command: "delete",
     args: "<address>",
-    summary: "删除整条转发规则（删除后发往该地址的邮件会被拒收退信）",
+    summary: "删除整条规则（删除后发往该地址的邮件会被拒收退信）",
     api: "DELETE /admin/api/rules/:address",
     examples: ["cfmctl delete test"],
   },
@@ -180,6 +328,20 @@ export const CLI_COMMANDS_SPEC: CliCommandSpec[] = [
     summary: "查看最近投递日志（默认 50 条，已自动解码 UTF-8 主题）",
     api: "GET /admin/api/logs",
     examples: ["cfmctl logs 20"],
+  },
+  {
+    command: "check-dest",
+    args: "<dest...>",
+    summary: "检查目标邮箱的 Cloudflare 验证状态（verified/pending/missing/unknown）",
+    api: "GET /admin/api/destinations/status",
+    examples: ["cfmctl check-dest me@gmail.com backup@outlook.com"],
+  },
+  {
+    command: "verify-dest",
+    args: "<dest>",
+    summary: "向目标邮箱发送/重发 Cloudflare 验证邮件",
+    api: "POST /admin/api/destinations/verify",
+    examples: ["cfmctl verify-dest me@gmail.com"],
   },
   {
     command: "check-token",
@@ -192,10 +354,9 @@ export const CLI_COMMANDS_SPEC: CliCommandSpec[] = [
 export const AGENT_WORKFLOW_RULES: string[] = [
   "执行任何命令前，若工作目录存在 `.env`，先执行 `set -a && source .env && set +a` 加载 `CFMCTL_URL` 与 `CFMCTL_TOKEN`。",
   "可以通过 `cfmctl schema`（本地定义）或 `cfmctl schema --remote`（实时向线上 Worker 请求 `/admin/schema`）随时自省最新的 API 与 CLI 结构。",
-  "`set` 是全量覆盖语义：若用户要求「再加一个目标邮箱」，必须先 `cfmctl get <address>` 获取现有 `targets`，合并后再 `set`（对 `enabled: false` 的目标加 `-` 前缀保持暂停状态）。",
-  "临时停用或恢复某个转发目标时，直接使用 `cfmctl disable <address> <dest>` / `cfmctl enable <address> <dest>`。",
+  "需要不转发、仅程序化轮询收验证码/Magic-Link 时，使用 `cfmctl set <prefix> --inbox --allow-from anthropic.com` 创建纯收件箱规则，并将生成的 `cfmk_...` 凭证提供给对应消费方轮询 `GET /api/inbox?unread=1&consume=1`。",
   "`<address>` 参数支持只写前缀（如 `hi`），服务端会自动补全 `@<MAIL_DOMAIN>`。",
-  "遇到部署鉴权失败时，运行 `cfmctl check-token <domain> --cf-token <TOKEN>` 获取精确的 `fix_hint`。",
+  "新增转发目标后务必检查响应中的 `verification`：目标为 pending 或 missing 时转发必然失败，应执行 `cfmctl verify-dest <dest>` 发送验证邮件。",
 ];
 
 export function getFullSchema() {
@@ -210,7 +371,7 @@ export function getFullSchema() {
 
 export function renderCliHelp(): string {
   const cmdLines = CLI_COMMANDS_SPEC.map((c) => {
-    const left = `${c.command}${c.args ? " " + c.args : ""}`.padEnd(36, " ");
+    const left = `${c.command}${c.args ? " " + c.args : ""}`.padEnd(44, " ");
     return `  ${left}${c.summary}`;
   }).join("\n");
 

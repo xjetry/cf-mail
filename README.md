@@ -16,6 +16,8 @@
 
 - **动态转发规则**：支持 `任意前缀@你的域名` 转发到一个或多个目标邮箱，修改立即生效，无需重新部署。
 - **目标邮箱独立开关**：同一规则下添加多个目标邮箱时，支持在列表或弹窗中一键暂停/启用其中某一个或某几个目标，无需删除规则。
+- **目标邮箱验证状态检查**：保存规则时自动检查各目标是否已在 Cloudflare Destination Addresses 中验证（`message.forward()` 只能发往已验证地址），未验证目标在规则弹窗中直观标注，并可一键发送/重发验证邮件；CLI 提供 `check-dest` / `verify-dest` 命令。
+- **投递失败可观测**：全部目标转发失败时日志标记 `rejected` 并记录错误详情，部分失败原因也会在 Web 日志与 CLI 中展示。
 - **Web 管理面板**：
   - 收件地址后缀自动固定补全（只需输入前缀，如 `hello`）。
   - 实时动态搜索过滤（同时匹配收件地址与所有目标邮箱）+ 分页浏览（支持 10/20/50 条/页）。
@@ -35,6 +37,7 @@ cf-mail/
 │   ├── src/index.ts        # email() 转发入口与 fetch() 路由
 │   ├── src/forward-store.ts# Durable Object：规则 CRUD、目标启停、日志与 RFC 2047 解码
 │   ├── src/admin.ts        # /admin/api/* REST 接口（Bearer Token 鉴权）
+│   ├── src/cf-destinations.ts # Cloudflare Destination Addresses 验证状态检查与验证邮件发送
 │   ├── src/ui.html         # 单文件响应式 Web 管理界面
 │   └── wrangler.jsonc      # Worker 与 Durable Object 配置
 ├── cli/                    # cfm / cfmctl 命令行工具（Node >= 18，零运行时依赖）
@@ -113,6 +116,8 @@ CFMCTL_TOKEN=cfm_your_strong_random_token_here
 
 执行一键部署（内部会自动先运行 `check-token`，通过后部署 Worker 并绑定 `MAIL_DOMAIN` 与 `CUSTOM_DOMAIN`）：
 
+> 部署脚本还会自动注入 `CF_ACCOUNT_ID` 变量与 `CLOUDFLARE_API_TOKEN` Secret，供 Worker 在保存规则时检查目标邮箱验证状态、发送验证邮件（复用部署 Token 的 `Email Routing Addresses Edit` 权限）。若不希望启用该功能，可不注入，此时验证状态全部显示为 `unknown`，不影响规则管理。
+
 ```bash
 CLOUDFLARE_API_TOKEN=<你的_CF_API_TOKEN> npm run deploy
 ```
@@ -130,6 +135,7 @@ printf "%s" "<你的_ADMIN_TOKEN>" | CLOUDFLARE_API_TOKEN=<你的_CF_API_TOKEN> 
 
 1. **添加并验证目标邮箱**：在 **Destination addresses** 中添加你要接收转发邮件的个人邮箱（如 `you@gmail.com`），去收件箱点击 Cloudflare 发来的确认链接（若该邮箱本身就是当前 Cloudflare 账号邮箱，则自动处于 `Verified` 状态）。
    - *注：目标邮箱验证是 Cloudflare 账号级共享池，同一邮箱只需验证一次，后续在规则间任意切换无需重复验证。*
+   - **也可以直接在 cf-mail 内完成**：新增/编辑规则弹窗会实时标注每个目标的验证状态（已验证 / 待验证 / 未添加），点击「发送验证邮件」即可；CLI 则使用 `cfmctl verify-dest you@gmail.com` 发送、`cfmctl check-dest you@gmail.com` 复查。
 2. **开启 Email Routing & Catch-All**：
    - 添加 Email Routing 所需的 `MX` / `SPF` / `DKIM` DNS 记录并开启 Email Routing 总开关。
    - 将 **Catch-all address** 动作设为 **Send to a Worker** → 选择 `cf-mail` 并开启。
@@ -170,19 +176,43 @@ cfmctl delete hi
 
 # 6. 查看最近投递日志（默认 50 条）
 cfmctl logs 20
+
+# 7. 检查目标邮箱验证状态 / 发送验证邮件（未验证的目标转发会失败）
+cfmctl check-dest you@gmail.com
+cfmctl verify-dest you@gmail.com   # 发送后到目标邮箱点击验证链接，再 check-dest 复查为 verified
+# 8. 创建「不转发、仅收件箱」规则（限 anthropic.com 发件人）并生成该前缀独立查询 Key
+cfmctl set claude01 --inbox --allow-from anthropic.com
+cfmctl key claude01 --rotate
+cfmctl inbox claude01 --unread --consume
 ```
 
 | 命令 | 说明 |
 |---|---|
 | `health` | 检查 Worker `/admin/healthz` 连通性 |
-| `list` | 列出全部转发规则及各目标启用状态（暂停的目标标注 `(off)`） |
-| `get <address>` | 查看单条规则 JSON（支持只传前缀） |
-| `set <address> <dest...>` | 新增或覆盖规则（多目标空格分隔；目标前加 `-` 如 `-b@gmail.com` 表示初始为暂停状态） |
+| `list` | 列出全部转发/收件箱规则及各目标启用状态（暂停的目标标注 `(off)`） |
+| `get <address>` | 查看单条规则 JSON（含 `inboxKey`） |
+| `set <address> [--inbox] [--allow-from d1,d2] [dest...]` | 新增或覆盖规则（支持 `--inbox` 零转发目标模式与发件人域名白名单） |
+| `key <address> [--rotate \| --revoke]` | 查看、重置轮换或吊销单前缀独立收件箱查询 Key (`cfmk_...`) |
+| `inbox [address] [--unread] [--consume]` | 查看临时收件箱邮件（自动提取 Magic-Link 与 6 位验证码） |
+| `watch <address> [--ttl SEC] [--allow-from d1,d2]` | 开启一次性临时收件监听槽位（默认 30 分钟） |
+| `unwatch <address>` | 关闭临时收件监听槽位 |
 | `enable <address> <dest>` | 启用某条规则下的指定目标邮箱 |
 | `disable <address> <dest>` | 暂停某条规则下的指定目标邮箱 |
-| `delete <address>` | 删除规则（删除后发往该地址的邮件会被拒信退回） |
-| `logs [limit]` | 查看最近投递日志（最多保留最近 200 条） |
+| `delete <address>` | 删除规则（同时立即作废其独立 `inboxKey`） |
+| `logs [limit]` | 查看最近投递日志（最多保留最近 200 条；拒信与部分失败均展示原因） |
+| `check-dest <dest...>` | 检查目标邮箱的 Cloudflare 验证状态（`verified` / `pending` / `missing` / `unknown`） |
+| `verify-dest <dest>` | 向目标邮箱发送/重发 Cloudflare 验证邮件（已验证则跳过） |
 | `check-token [domain]` | 检测 Cloudflare API Token 是否具备全部部署权限并输出 `fix_hint` |
+
+### 单邮箱程序化轮询接口 (`/api/inbox`)
+
+为开启收件箱的前缀生成的 `cfmk_...` 凭证严格绑定单个邮箱，无法访问其他邮箱或 `/admin/*` 管理接口：
+
+```bash
+# 拉取未读邮件并原子标记为已消费（防止重复登录时拿到上一封失效的 Magic-Link）
+curl -s "https://mail.example.com/api/inbox?unread=1&consume=1" \
+  -H "Authorization: Bearer cfmk_your_prefix_key"
+```
 
 ---
 

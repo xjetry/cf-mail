@@ -1,2 +1,6 @@
 # 本地开发密钥：cp .dev.vars.example .dev.vars 后修改
 ADMIN_TOKEN=dev-token
+
+# 可选：目标邮箱验证状态检查 / 发送验证邮件（不配置则状态全部为 unknown，不影响规则管理）
+# CLOUDFLARE_API_TOKEN=<具有 Account - Email Routing Addresses - Edit 权限的 Token>
+# CF_ACCOUNT_ID=<目标域名所属 Account ID>

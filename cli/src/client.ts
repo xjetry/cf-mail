@@ -10,7 +10,51 @@ export type ForwardRule = {
   address: string;
   destinations: string[];
   targets?: DestinationTarget[];
+  inboxEnabled?: boolean;
+  allowedSenders?: string[];
+  inboxKey?: string;
   updatedAt: string;
+};
+
+export type InboxMessage = {
+  id: string;
+  ts: string;
+  expiresAt: number;
+  read: boolean;
+  readAt?: string;
+  from: string;
+  to: string;
+  subject: string;
+  messageId: string;
+  text: string;
+  html?: string;
+  links: string[];
+  codes: string[];
+};
+
+export type WatchSlot = {
+  address: string;
+  createdAt: string;
+  expiresAt: number;
+  allowedSenders?: string[];
+};
+
+export type DestinationVerification = {
+  address: string;
+  status: "verified" | "pending" | "missing" | "unknown";
+  verifiedAt?: string;
+  message?: string;
+};
+
+export type DestinationCheckResult = {
+  configured: boolean;
+  destinations: DestinationVerification[];
+};
+
+export type SendVerificationResult = {
+  destination: DestinationVerification;
+  action: "sent" | "resent" | "already_verified";
+  message: string;
 };
 
 export type DeliveryLog = {
@@ -74,10 +118,75 @@ export function createClient(opts: ClientOptions) {
     listRules: () => call<{ domain?: string; rules: ForwardRule[] }>("/admin/api/rules"),
     getRule: (address: string) =>
       call<{ rule: ForwardRule }>(`/admin/api/rules/${encodeURIComponent(address)}`),
-    setRule: (address: string, destinations: string[]) =>
-      call<{ rule: ForwardRule }>(`/admin/api/rules/${encodeURIComponent(address)}`, {
-        method: "PUT",
-        body: JSON.stringify({ destinations }),
+    setRule: (
+      address: string,
+      destinations: string[],
+      extra?: { inboxEnabled?: boolean; allowedSenders?: string[] },
+    ) =>
+      call<{ rule: ForwardRule; verification?: DestinationCheckResult }>(
+        `/admin/api/rules/${encodeURIComponent(address)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            destinations,
+            ...(extra?.inboxEnabled !== undefined
+              ? { inboxEnabled: extra.inboxEnabled }
+              : {}),
+            ...(extra?.allowedSenders !== undefined
+              ? { allowedSenders: extra.allowedSenders }
+              : {}),
+          }),
+        },
+      ),
+    rotateInboxKey: (address: string) =>
+      call<{ rule: ForwardRule; inboxKey: string }>(
+        `/admin/api/rules/${encodeURIComponent(address)}/inbox-key`,
+        { method: "POST" },
+      ),
+    revokeInboxKey: (address: string) =>
+      call<{ rule: ForwardRule }>(
+        `/admin/api/rules/${encodeURIComponent(address)}/inbox-key`,
+        { method: "DELETE" },
+      ),
+    watchInbox: (
+      address: string,
+      opts?: { ttlSeconds?: number; allowedSenders?: string[] },
+    ) =>
+      call<{ watch: WatchSlot }>("/admin/api/inbox/watch", {
+        method: "POST",
+        body: JSON.stringify({ address, ...opts }),
+      }),
+    unwatchInbox: (address: string) =>
+      call<{ ok: boolean }>(
+        `/admin/api/inbox/watch/${encodeURIComponent(address)}`,
+        { method: "DELETE" },
+      ),
+    listInbox: (opts?: {
+      to?: string;
+      unread?: boolean;
+      consume?: boolean;
+      since?: string;
+      limit?: number;
+    }) => {
+      const q = new URLSearchParams();
+      if (opts?.to) q.set("to", opts.to);
+      if (opts?.unread) q.set("unread", "1");
+      if (opts?.consume) q.set("consume", "1");
+      if (opts?.since) q.set("since", opts.since);
+      if (opts?.limit) q.set("limit", String(opts.limit));
+      const qs = q.toString();
+      return call<{ messages: InboxMessage[] }>(
+        `/admin/api/inbox${qs ? `?${qs}` : ""}`,
+      );
+    },
+    checkDestinations: (addresses: string[]) =>
+      call<DestinationCheckResult>(
+        `/admin/api/destinations/status?addresses=${encodeURIComponent(addresses.join(","))}`,
+      ),
+    verifyDestination: (address: string) =>
+      call<SendVerificationResult>("/admin/api/destinations/verify", {
+        method: "POST",
+        body: JSON.stringify({ address }),
       }),
     setTargetEnabled: (address: string, target: string, enabled: boolean) =>
       call<{ rule: ForwardRule }>(`/admin/api/rules/${encodeURIComponent(address)}/targets`, {
@@ -95,11 +204,6 @@ export function createClient(opts: ClientOptions) {
 
 export type Client = ReturnType<typeof createClient>;
 
-/**
- * cfm（本地）与 cfmctl（远程）共用：
- * - cfm    → CFM_URL / CFM_TOKEN
- * - cfmctl → CFMCTL_URL / CFMCTL_TOKEN（或 --url/--token 参数）
- */
 export function resolveConfig(
   env: Record<string, string | undefined>,
   flagUrl?: string,

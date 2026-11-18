@@ -115,7 +115,15 @@ async function main() {
   const report = JSON.parse(reportOut.stdout);
   const resolvedDomain = domain ?? report.domain ?? "example.com";
 
-  const wranglerArgs = ["wrangler", "deploy", "--var", `MAIL_DOMAIN:${resolvedDomain}`];
+  const wranglerArgs = [
+    "wrangler",
+    "deploy",
+    "--var",
+    `MAIL_DOMAIN:${resolvedDomain}`,
+    // 供 Worker 调用 Cloudflare API 检查目标邮箱验证状态 / 发送验证邮件
+    "--var",
+    `CF_ACCOUNT_ID:${report.accountId}`,
+  ];
   if (customDomain) {
     wranglerArgs.push("--domain", customDomain);
   }
@@ -134,6 +142,29 @@ async function main() {
   });
   if (deployRes.status !== 0) {
     process.exit(deployRes.status ?? 1);
+  }
+
+  // 注入 CLOUDFLARE_API_TOKEN Secret（用于目标邮箱验证状态检查与发送验证邮件，复用部署 Token 的 Email Routing Addresses Edit 权限）
+  console.log("\n=== 注入 CLOUDFLARE_API_TOKEN Secret（目标邮箱验证状态检查 / 发送验证邮件） ===");
+  const secretRes = spawnSync(
+    "npx",
+    ["wrangler", "secret", "put", "CLOUDFLARE_API_TOKEN"],
+    {
+      cwd: resolve(rootDir, "worker"),
+      input: cfToken,
+      stdio: ["pipe", "inherit", "inherit"],
+      env: {
+        ...process.env,
+        CLOUDFLARE_API_TOKEN: cfToken,
+        CLOUDFLARE_ACCOUNT_ID: report.accountId,
+      },
+    },
+  );
+  if (secretRes.status !== 0) {
+    console.warn(
+      "warning: CLOUDFLARE_API_TOKEN Secret 注入失败，目标邮箱验证检查功能将不可用（规则管理不受影响）。\n" +
+        "可手动执行: printf \"%s\" \"<你的_CF_API_TOKEN>\" | npx wrangler secret put CLOUDFLARE_API_TOKEN",
+    );
   }
 }
 

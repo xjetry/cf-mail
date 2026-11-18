@@ -19,6 +19,7 @@
         --accent-soft: rgba(79, 140, 255, 0.14);
         --danger: #ff6b6b;
         --danger-soft: rgba(255, 107, 107, 0.14);
+        --warn: #f5b255;
         --ok: #3ddc97;
         --ok-border: rgba(61, 220, 151, 0.5);
         --ok-glow: rgba(61, 220, 151, 0.55);
@@ -42,6 +43,7 @@
         --accent-soft: rgba(37, 99, 235, 0.1);
         --danger: #e11d48;
         --danger-soft: rgba(225, 29, 72, 0.1);
+        --warn: #d97706;
         --ok: #10b981;
         --ok-border: rgba(16, 185, 129, 0.45);
         --ok-glow: rgba(16, 185, 129, 0.4);
@@ -185,6 +187,8 @@
       }
       .badge.ok { color: var(--ok); border-color: var(--ok); }
       .badge.rej { color: var(--danger); border-color: var(--danger); }
+      .badge.warn { color: var(--warn); border-color: var(--warn); }
+      .badge.muted { color: var(--muted); }
       .target-chip {
         display: inline-flex;
         align-items: center;
@@ -432,6 +436,8 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .target-row .badge { flex-shrink: 0; margin: 0; font-size: 11px; padding: 2px 7px; }
+      .target-row .verify-btn { flex-shrink: 0; white-space: nowrap; }
       .target-row.off .addr-text {
         color: var(--muted);
         text-decoration: line-through;
@@ -575,6 +581,31 @@
         </div>
 
         <div class="card">
+          <div class="toolbar">
+            <h2 style="margin: 0">
+              临时收件箱
+              <span style="font-weight: 400; font-size: 12px; color: var(--muted)">（单封保留 30 分钟，支持一键复制 Magic-Link / 验证码）</span>
+            </h2>
+            <div class="toolbar-right">
+              <input
+                id="inbox-filter"
+                type="search"
+                placeholder="按收件前缀或邮箱筛选…"
+                autocomplete="off"
+                style="max-width: 220px; padding: 7px 12px; font-size: 13px"
+              />
+              <button class="secondary small" id="inbox-refresh">刷新收件箱</button>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>时间 / 状态</th><th>发件人 → 收件人</th><th>主题与提取内容</th><th style="text-align: right">操作</th></tr>
+            </thead>
+            <tbody id="inbox-rows"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
           <h2>最近投递</h2>
           <table>
             <thead>
@@ -600,8 +631,37 @@
             <span class="suffix" id="modal-domain-suffix">@example.com</span>
           </div>
         </div>
+        <div style="margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--elevated)">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+            <div>
+              <div style="font-weight: 600; font-size: 13px">临时收件箱暂存（支持不转发收验证码 / Magic-Link）</div>
+              <div class="hint" style="margin-top: 2px">开启后邮件正文与链接暂存 30 分钟（转发目标可留空），并自动生成该前缀专属查询 Key。</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="modal-inbox-enabled" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div style="margin-top: 10px">
+            <label for="modal-allowed-senders">发件人域名/邮箱白名单（可选，逗号分隔，非白名单直接拒信）</label>
+            <div style="display: flex; gap: 8px">
+              <input id="modal-allowed-senders" placeholder="留空表示不限；例如 anthropic.com" autocomplete="off" />
+              <button type="button" class="secondary small" id="modal-fill-anthropic">仅 anthropic.com</button>
+            </div>
+          </div>
+          <div id="modal-key-section" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border)">
+            <label>该前缀专属收件箱 Key（供客户端轮询 GET /api/inbox）</label>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+              <code id="modal-inbox-key-val" style="font-size: 12px; padding: 5px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); word-break: break-all"></code>
+              <button type="button" class="secondary small" id="modal-copy-key">复制 Key</button>
+              <button type="button" class="secondary small" id="modal-copy-curl">复制轮询命令</button>
+              <button type="button" class="secondary small" id="modal-rotate-key">重置 Key</button>
+              <button type="button" class="danger small" id="modal-revoke-key">吊销 Key</button>
+            </div>
+          </div>
+        </div>
         <div style="margin-top: 14px">
-          <label>目标地址列表（可独立开关或移除）</label>
+          <label>目标地址列表（开启临时收件箱时可留空，也可同时转发）</label>
           <div class="target-list" id="modal-target-list"></div>
           <div style="display: flex; gap: 8px; margin-top: 10px">
             <input
@@ -645,6 +705,9 @@
       let modalMode = "add"; // "add" | "edit"
       let editingOriginalAddress = "";
       let editingTargets = [];
+      let editingInboxKey = "";
+      let destStatusMap = {}; // 目标地址 → { status, message }（Cloudflare 验证状态）
+      let verificationReqId = 0;
       const $ = (id) => document.getElementById(id);
 
       const ICONS = {
@@ -856,11 +919,11 @@
       });
 
       /* ---------------- 基础工具与业务逻辑 ---------------- */
-      function toast(msg, err = false) {
+      function toast(msg, err = false, duration = 2200) {
         const t = $("toast");
         t.textContent = msg;
         t.className = "toast show" + (err ? " err" : "");
-        setTimeout(() => (t.className = "toast"), 2200);
+        setTimeout(() => (t.className = "toast"), duration);
       }
 
       function normalizePrefixInput(val) {
@@ -996,6 +1059,18 @@
 
           const tdDests = document.createElement("td");
           tdDests.className = "dests";
+          if (r.inboxEnabled) {
+            const ibBadge = document.createElement("span");
+            ibBadge.className = "badge ok";
+            ibBadge.textContent = "📥 临时收件箱";
+            tdDests.appendChild(ibBadge);
+          }
+          if (Array.isArray(r.allowedSenders) && r.allowedSenders.length > 0) {
+            const sb = document.createElement("span");
+            sb.className = "badge muted";
+            sb.textContent = "限 " + r.allowedSenders.join(",");
+            tdDests.appendChild(sb);
+          }
           const targets = getRuleTargets(r);
           for (const t of targets) {
             const chip = document.createElement("span");
@@ -1011,6 +1086,18 @@
 
           const tdAct = document.createElement("td");
           tdAct.className = "actions-cell";
+
+          if (r.inboxKey) {
+            const keyBtn = document.createElement("button");
+            keyBtn.className = "secondary small";
+            keyBtn.textContent = "复制Key";
+            keyBtn.title = "复制该前缀专属收件箱查询 Key";
+            keyBtn.onclick = async () => {
+              await navigator.clipboard.writeText(r.inboxKey);
+              toast(`已复制 ${r.address} 的专属 Key`);
+            };
+            tdAct.appendChild(keyBtn);
+          }
 
           const editBtn = document.createElement("button");
           editBtn.className = "secondary small";
@@ -1052,6 +1139,35 @@
         if (data.domain) updateDomainLabels(data.domain);
         allRules = data.rules ?? [];
         renderRules();
+      }
+
+      // 检查弹窗内所有目标的 Cloudflare 验证状态（未配置 CF API 时全部 unknown，不打扰）
+      async function refreshModalVerification() {
+        const addresses = [...new Set(editingTargets.map((t) => t.address))];
+        if (addresses.length === 0) return;
+        const reqId = ++verificationReqId;
+        try {
+          const data = await api("/admin/api/destinations/status?addresses=" + encodeURIComponent(addresses.join(",")));
+          if (reqId !== verificationReqId) return; // 已有更新的检查请求
+          for (const d of data.destinations ?? []) {
+            destStatusMap[d.address] = { status: d.status, message: d.message };
+          }
+          renderModalTargets();
+        } catch { /* 状态检查失败不影响规则编辑 */ }
+      }
+
+      async function sendVerification(address) {
+        try {
+          const r = await api("/admin/api/destinations/verify", {
+            method: "POST",
+            body: JSON.stringify({ address }),
+          });
+          toast(r.message, false, 6000);
+        } catch (e) {
+          toast(String(e.message), true, 6000);
+        } finally {
+          await refreshModalVerification();
+        }
       }
 
       function renderModalTargets() {
@@ -1096,37 +1212,83 @@
 
           row.appendChild(labelSwitch);
           row.appendChild(addrSpan);
+
+          const vs = destStatusMap[t.address];
+          if (vs) {
+            const vb = document.createElement("span");
+            const label = { verified: "已验证", pending: "待验证", missing: "未添加", unknown: "状态未知" }[vs.status] ?? vs.status;
+            vb.className = "badge " + ({ verified: "ok", pending: "warn", missing: "rej", unknown: "muted" }[vs.status] || "muted");
+            vb.textContent = label;
+            if (vs.message) vb.title = vs.message;
+            row.appendChild(vb);
+            if (vs.status === "pending" || vs.status === "missing") {
+              const vbtn = document.createElement("button");
+              vbtn.className = "secondary small verify-btn";
+              vbtn.textContent = vs.status === "pending" ? "重发验证邮件" : "发送验证邮件";
+              vbtn.title = "通过 Cloudflare 向该邮箱发送验证邮件，点击邮件中的链接验证后才能正常转发";
+              vbtn.onclick = async () => {
+                vbtn.disabled = true;
+                vbtn.textContent = "发送中…";
+                await sendVerification(t.address);
+              };
+              row.appendChild(vbtn);
+            }
+          }
+
           row.appendChild(removeBtn);
           list.appendChild(row);
         });
       }
 
+      function renderModalKeySection() {
+        const box = $("modal-key-section");
+        if (modalMode === "edit" && editingInboxKey) {
+          box.style.display = "block";
+          $("modal-inbox-key-val").textContent = editingInboxKey;
+        } else {
+          box.style.display = "none";
+          $("modal-inbox-key-val").textContent = "";
+        }
+      }
+
       function openAddModal() {
         modalMode = "add";
         editingOriginalAddress = "";
-        $("modal-title").textContent = "新增转发规则";
+        editingInboxKey = "";
+        $("modal-title").textContent = "新增规则";
         $("modal-save").textContent = "添加规则";
         $("modal-addr").value = "";
+        $("modal-inbox-enabled").checked = false;
+        $("modal-allowed-senders").value = "";
         editingTargets = [];
         $("modal-new-target").value = "";
+        renderModalKeySection();
         renderModalTargets();
         $("rule-modal").classList.add("open");
         $("rule-modal").setAttribute("aria-hidden", "false");
         $("modal-addr").focus();
+        refreshModalVerification();
       }
 
       function openEditModal(rule) {
         modalMode = "edit";
         editingOriginalAddress = rule.address;
-        $("modal-title").textContent = "编辑转发规则";
+        editingInboxKey = rule.inboxKey ?? "";
+        $("modal-title").textContent = "编辑规则";
         $("modal-save").textContent = "保存修改";
         $("modal-addr").value = stripDomainSuffix(rule.address);
+        $("modal-inbox-enabled").checked = Boolean(rule.inboxEnabled);
+        $("modal-allowed-senders").value = Array.isArray(rule.allowedSenders)
+          ? rule.allowedSenders.join(", ")
+          : "";
         editingTargets = getRuleTargets(rule).map((t) => ({ ...t }));
         $("modal-new-target").value = "";
+        renderModalKeySection();
         renderModalTargets();
         $("rule-modal").classList.add("open");
         $("rule-modal").setAttribute("aria-hidden", "false");
         $("modal-addr").focus();
+        refreshModalVerification();
       }
 
       function closeModal() {
@@ -1145,6 +1307,7 @@
         }
         $("modal-new-target").value = "";
         renderModalTargets();
+        refreshModalVerification();
       }
 
       async function saveModal() {
@@ -1152,23 +1315,132 @@
           addTargetsToModal();
         }
         const newAddress = normalizePrefixInput($("modal-addr").value);
-        if (!newAddress || editingTargets.length === 0) {
-          return toast("请填写收件地址前缀并添加至少一个目标邮箱", true);
+        const inboxEnabled = Boolean($("modal-inbox-enabled").checked);
+        const allowedSenders = $("modal-allowed-senders")
+          .value.split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        if (!newAddress) {
+          return toast("请填写收件地址前缀", true);
+        }
+        if (!inboxEnabled && editingTargets.length === 0) {
+          return toast("请添加至少一个目标邮箱，或开启「临时收件箱暂存」", true);
         }
         const targetUrlAddr = modalMode === "edit" ? editingOriginalAddress : newAddress;
         try {
-          await api("/admin/api/rules/" + encodeURIComponent(targetUrlAddr), {
+          const data = await api("/admin/api/rules/" + encodeURIComponent(targetUrlAddr), {
             method: "PUT",
             body: JSON.stringify({
               address: newAddress,
               targets: editingTargets,
+              inboxEnabled,
+              allowedSenders,
             }),
           });
           closeModal();
-          toast(modalMode === "edit" ? "规则已更新" : "规则已添加，立即生效");
-          await loadRules();
+          const unverified = (data.verification?.destinations ?? []).filter(
+            (d) => d.status === "pending" || d.status === "missing",
+          );
+          if (unverified.length > 0) {
+            toast(
+              `规则已保存，但 ${unverified.map((d) => d.address).join("、")} 未通过 Cloudflare 验证，转发会失败！请编辑该规则点击「发送验证邮件」并到目标邮箱完成验证`,
+              true,
+              9000,
+            );
+          } else {
+            toast(modalMode === "edit" ? "规则已更新" : "规则已添加，立即生效");
+          }
+          await loadAll();
         } catch (e) {
           toast(String(e.message), true);
+        }
+      }
+
+      async function loadInbox() {
+        const q = ($("inbox-filter")?.value ?? "").trim();
+        const url = "/admin/api/inbox?limit=25" + (q ? "&to=" + encodeURIComponent(q) : "");
+        const { messages } = await api(url);
+        const tbody = $("inbox-rows");
+        tbody.innerHTML = "";
+        if (!messages || messages.length === 0) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="4" class="dests" style="text-align:center;padding:14px 8px">暂无临时收件箱邮件</td>`;
+          tbody.appendChild(tr);
+          return;
+        }
+        for (const m of messages) {
+          const tr = document.createElement("tr");
+          const time = new Date(m.ts).toLocaleString();
+          const stateBadge = m.read
+            ? `<span class="badge muted">已消费</span>`
+            : `<span class="badge ok">未读</span>`;
+
+          const tdTime = document.createElement("td");
+          tdTime.className = "dests";
+          tdTime.innerHTML = `${escapeHtml(time)}<br/>${stateBadge}`;
+
+          const tdAddr = document.createElement("td");
+          tdAddr.textContent = `${m.from} → ${m.to}`;
+
+          const tdContent = document.createElement("td");
+          const subj = document.createElement("div");
+          subj.style.fontWeight = "600";
+          subj.textContent = (m.subject ?? "(无主题)").slice(0, 80);
+          tdContent.appendChild(subj);
+
+          if (Array.isArray(m.codes) && m.codes.length > 0) {
+            for (const c of m.codes) {
+              const btn = document.createElement("button");
+              btn.className = "secondary small";
+              btn.style.marginTop = "6px";
+              btn.style.marginRight = "6px";
+              btn.textContent = `验证码 ${c} (复制)`;
+              btn.onclick = async () => {
+                await navigator.clipboard.writeText(c);
+                toast(`已复制验证码: ${c}`);
+              };
+              tdContent.appendChild(btn);
+            }
+          }
+          if (Array.isArray(m.links) && m.links.length > 0) {
+            const firstLink = m.links[0];
+            const copyLinkBtn = document.createElement("button");
+            copyLinkBtn.className = "secondary small";
+            copyLinkBtn.style.marginTop = "6px";
+            copyLinkBtn.style.marginRight = "6px";
+            copyLinkBtn.textContent = "复制首条链接";
+            copyLinkBtn.title = firstLink;
+            copyLinkBtn.onclick = async () => {
+              await navigator.clipboard.writeText(firstLink);
+              toast("已复制链接到剪贴板");
+            };
+            tdContent.appendChild(copyLinkBtn);
+          }
+
+          const tdAct = document.createElement("td");
+          tdAct.className = "actions-cell";
+          const delBtn = document.createElement("button");
+          delBtn.className = "danger small";
+          delBtn.textContent = "删除";
+          delBtn.onclick = async () => {
+            try {
+              await api("/admin/api/inbox/" + encodeURIComponent(m.id) + "?to=" + encodeURIComponent(m.to), {
+                method: "DELETE",
+              });
+              toast("邮件已删除");
+              await loadInbox();
+            } catch (e) {
+              toast(String(e.message), true);
+            }
+          };
+          tdAct.appendChild(delBtn);
+
+          tr.appendChild(tdTime);
+          tr.appendChild(tdAddr);
+          tr.appendChild(tdContent);
+          tr.appendChild(tdAct);
+          tbody.appendChild(tr);
         }
       }
 
@@ -1179,9 +1451,21 @@
         for (const l of logs) {
           const tr = document.createElement("tr");
           const time = new Date(l.ts).toLocaleString();
-          const result = l.rejected
-            ? `<span class="badge rej">rejected${l.reason ? ": " + escapeHtml(l.reason) : ""}</span>`
-            : l.forwardedTo.map((d) => `<span class="badge ok">${escapeHtml(d)}</span>`).join("");
+          const reasonBadge = (cls, prefix) => {
+            const full = String(l.reason ?? "");
+            if (!full) return "";
+            const short = full.length > 80 ? full.slice(0, 80) + "…" : full;
+            return `<span class="badge ${cls}" title="${escapeHtml(full)}">${prefix}${escapeHtml(short)}</span>`;
+          };
+          let result;
+          if (l.rejected) {
+            result = `<span class="badge rej">rejected</span>` + reasonBadge("rej", "");
+          } else {
+            result = l.forwardedTo.length
+              ? l.forwardedTo.map((d) => `<span class="badge ok">${escapeHtml(d)}</span>`).join("")
+              : `<span class="badge rej">未转发</span>`;
+            result += reasonBadge("warn", "⚠ "); // 部分失败原因（历史日志含全部失败但 rejected 未标记的记录）
+          }
           const subject = escapeHtml((l.subject ?? "").slice(0, 60));
           tr.innerHTML = `<td class="dests">${escapeHtml(time)}</td><td>${escapeHtml(l.from)} → ${escapeHtml(l.to)}</td><td>${subject}</td><td>${result}</td>`;
           tbody.appendChild(tr);
@@ -1189,12 +1473,75 @@
       }
 
       async function loadAll() {
-        await Promise.all([loadRules(), loadLogs()]).catch(() => {});
+        await Promise.all([loadRules(), loadInbox(), loadLogs()]).catch(() => {});
       }
 
       $("login").onclick = login;
       $("token").addEventListener("keydown", (e) => e.key === "Enter" && login());
       $("open-add-modal").onclick = openAddModal;
+      $("inbox-refresh").onclick = () => loadInbox().then(() => toast("收件箱已刷新")).catch((e) => toast(String(e.message), true));
+      $("inbox-filter").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") loadInbox();
+      });
+      $("modal-fill-anthropic").onclick = () => {
+        $("modal-allowed-senders").value = "anthropic.com";
+      };
+      $("modal-copy-key").onclick = async () => {
+        if (!editingInboxKey) return;
+        await navigator.clipboard.writeText(editingInboxKey);
+        toast("已复制专属收件箱 Key");
+      };
+      $("modal-copy-curl").onclick = async () => {
+        if (!editingInboxKey) return;
+        const cmd = `curl -s "${location.origin}/api/inbox?unread=1&consume=1" -H "Authorization: Bearer ${editingInboxKey}"`;
+        await navigator.clipboard.writeText(cmd);
+        toast("已复制轮询 curl 命令");
+      };
+      $("modal-rotate-key").onclick = async () => {
+        if (!editingOriginalAddress) return;
+        const ok = await openConfirmDialog({
+          title: "重置专属 Key",
+          message: `确定重置 ${editingOriginalAddress} 的收件箱 Key 吗？旧 Key 将立即失效。`,
+          confirmText: "确认重置",
+          cancelText: "取消",
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          const data = await api("/admin/api/rules/" + encodeURIComponent(editingOriginalAddress) + "/inbox-key", {
+            method: "POST",
+          });
+          editingInboxKey = data.inboxKey ?? "";
+          $("modal-inbox-enabled").checked = true;
+          renderModalKeySection();
+          await loadRules();
+          toast("Key 已重置");
+        } catch (e) {
+          toast(String(e.message), true);
+        }
+      };
+      $("modal-revoke-key").onclick = async () => {
+        if (!editingOriginalAddress) return;
+        const ok = await openConfirmDialog({
+          title: "吊销专属 Key",
+          message: `确定吊销 ${editingOriginalAddress} 的收件箱 Key 吗？`,
+          confirmText: "确认吊销",
+          cancelText: "取消",
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          await api("/admin/api/rules/" + encodeURIComponent(editingOriginalAddress) + "/inbox-key", {
+            method: "DELETE",
+          });
+          editingInboxKey = "";
+          renderModalKeySection();
+          await loadRules();
+          toast("Key 已吊销");
+        } catch (e) {
+          toast(String(e.message), true);
+        }
+      };
       $("rule-search").addEventListener("input", () => {
         currentPage = 1;
         renderRules();
