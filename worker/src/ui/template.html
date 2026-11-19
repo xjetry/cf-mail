@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cf-mail 邮件路由与收件管理</title>
+    <style>
+/*__CFM_INLINE_STYLES__*/
+    </style>
+  </head>
+  <body>
+    <!-- 会话启动验证屏（消除直达链接与刷新时的登录页闪烁） -->
+    <div id="boot-screen" class="boot-screen" hidden>
+      <div class="boot-spinner" aria-hidden="true"></div>
+      <span>正在验证访问会话…</span>
+    </div>
+
+    <!-- 登录鉴权门禁 -->
+    <div id="gate" class="gate-shell" hidden>
+      <div class="gate-topbar">
+        <div id="gate-theme-select"></div>
+      </div>
+      <div class="gate-center">
+        <div class="card gate-card">
+          <div class="gate-brand">
+            <span class="gate-logo" id="gate-logo-icon" aria-hidden="true"></span>
+            <div>
+              <h1 class="gate-title">cf-mail</h1>
+              <div class="gate-subtitle">动态邮件路由与临时收件箱</div>
+            </div>
+          </div>
+
+          <div id="gate-notice" class="notice-banner" role="status" hidden></div>
+          <div id="gate-error" class="error-banner" role="alert" hidden></div>
+
+          <div class="field">
+            <label for="token">访问凭证</label>
+            <div class="input-action-wrap">
+              <input
+                id="token"
+                class="input input-lg"
+                type="password"
+                placeholder="ADMIN_TOKEN / cfmt_... / cfmk_..."
+                autocomplete="current-password"
+              />
+              <button
+                type="button"
+                class="input-action-btn"
+                id="gate-toggle-pwd"
+                aria-label="显示访问凭证"
+              ></button>
+            </div>
+            <p class="hint">
+              自动识别全局管理员、租户管理员（<code>cfmt_</code>）或单邮箱密钥（<code>cfmk_</code>）。
+            </p>
+          </div>
+
+          <div style="margin-top: 16px">
+            <button type="button" class="btn btn-lg btn-block" id="login">验证并进入</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 已认证工作台 -->
+    <div id="ui" hidden>
+      <header class="app-header">
+        <div class="app-header-inner">
+          <div class="header-brand">
+            <span class="brand-wordmark">
+              <span class="brand-icon" id="header-brand-icon" aria-hidden="true"></span>
+              <span>cf-mail</span>
+            </span>
+            <span class="domain-tag" id="header-domain-tag">@example.com</span>
+            <span id="role-badge"></span>
+          </div>
+          <div class="header-actions">
+            <div id="header-theme-select"></div>
+            <button type="button" class="btn btn-secondary" id="refresh">
+              <span id="refresh-icon" aria-hidden="true"></span>
+              <span id="refresh-label">刷新</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="logout">退出</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="app-main">
+        <!-- 多角色工作区导航栏（Admin: 4 Tabs, Tenant: 2 Tabs, User: 隐藏） -->
+        <nav class="workspace-nav" id="workspace-nav" aria-label="工作区切换" hidden>
+          <div class="tabs-list" role="tablist" id="workspace-tablist">
+            <button type="button" class="tab-btn" role="tab" id="tab-btn-rules" data-tab="rules" aria-controls="rules-card">
+              <span id="tab-label-rules">转发规则</span>
+              <span class="tab-count" id="tab-count-rules">0</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" id="tab-btn-inbox" data-tab="inbox" aria-controls="inbox-card">
+              <span>临时收件箱</span>
+              <span class="tab-count" id="tab-count-inbox">0</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" id="tab-btn-tokens" data-tab="tokens" aria-controls="tokens-card">
+              <span>访问令牌</span>
+              <span class="tab-count" id="tab-count-tokens">0</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" id="tab-btn-logs" data-tab="logs" aria-controls="logs-card">
+              <span>投递日志</span>
+              <span class="tab-count" id="tab-count-logs">0</span>
+            </button>
+          </div>
+        </nav>
+
+        <!-- 单邮箱用户顶部身份与渐进披露 API 密钥栏（仅 role === "user" 显示） -->
+        <section class="card user-mailbox-bar" id="user-credential-card" hidden>
+          <div class="user-mailbox-top">
+            <div>
+              <div class="hint">当前绑定邮箱</div>
+              <div class="user-mailbox-addr" id="user-current-address"></div>
+            </div>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              id="user-toggle-api"
+              aria-expanded="false"
+              aria-controls="user-api-drawer"
+            >
+              API 与密钥管理
+            </button>
+          </div>
+
+          <div class="user-api-drawer" id="user-api-drawer" hidden>
+            <div class="key-bar-row">
+              <code class="code-pill" id="user-inbox-key-val"></code>
+              <button type="button" class="btn btn-secondary btn-sm" id="user-reveal-key">显示密钥</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="user-copy-key">复制 Key</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="user-copy-link">复制直达链接</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="user-copy-curl">复制轮询命令</button>
+              <button type="button" class="btn btn-danger btn-sm" id="user-rotate-key">重置 Key</button>
+            </div>
+            <p class="hint">
+              重置 Key 后旧凭证与旧直达链接立即失效，当前会话会自动无缝切换至新 Key。
+            </p>
+          </div>
+        </section>
+
+        <!-- 工作区 1：转发规则管理（Admin & Tenant） -->
+        <section class="card section-card" id="rules-card" role="tabpanel" aria-labelledby="tab-btn-rules" hidden>
+          <div class="section-toolbar">
+            <div class="section-heading">
+              <div class="section-title-row">
+                <h2 class="section-title" id="rules-section-title">转发规则</h2>
+                <span class="badge badge-muted count-badge" id="rule-count">0</span>
+              </div>
+              <p class="section-subtitle">管理前缀邮件路由目标与临时收件策略</p>
+            </div>
+            <div class="toolbar-controls">
+              <div class="search-box toolbar-search">
+                <span id="rule-search-icon" aria-hidden="true"></span>
+                <input
+                  id="rule-search"
+                  class="input"
+                  type="search"
+                  placeholder="搜索收件地址、目标或租户…"
+                  aria-label="搜索转发规则"
+                  autocomplete="off"
+                />
+              </div>
+              <button type="button" class="btn" id="open-add-modal">新增规则</button>
+            </div>
+          </div>
+
+          <div class="table-wrap" id="rules-table-wrap">
+            <table class="data-table" aria-labelledby="rules-section-title">
+              <thead>
+                <tr>
+                  <th scope="col">收件地址</th>
+                  <th scope="col">投递目标与收件模式</th>
+                  <th scope="col">更新时间</th>
+                  <th scope="col" class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="rules"></tbody>
+            </table>
+          </div>
+          <div id="rules-state-host" hidden></div>
+
+          <div class="pagination-bar" id="rules-pagination">
+            <span class="page-meta" id="page-summary">共 0 条</span>
+            <div class="pagination-controls">
+              <span>每页</span>
+              <div id="page-size-select"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="page-prev" disabled>上一页</button>
+              <span class="page-indicator" id="page-indicator">1 / 1</span>
+              <button type="button" class="btn btn-secondary btn-sm" id="page-next" disabled>下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 工作区 2：临时收件箱（Admin & User） -->
+        <section class="card section-card" id="inbox-card" role="tabpanel" aria-labelledby="tab-btn-inbox" hidden>
+          <div class="section-toolbar">
+            <div class="section-heading">
+              <div class="section-title-row">
+                <h2 class="section-title" id="inbox-section-title">临时收件箱</h2>
+                <span class="badge badge-muted count-badge" id="inbox-count-badge">0</span>
+              </div>
+              <p class="section-subtitle">邮件暂存 30 分钟后自动清理；自动提取一次性验证码与登录链接</p>
+            </div>
+            <div class="toolbar-controls">
+              <div class="search-box toolbar-search" id="inbox-filter-wrap">
+                <span id="inbox-search-icon" aria-hidden="true"></span>
+                <input
+                  id="inbox-filter"
+                  class="input"
+                  type="search"
+                  placeholder="按收件前缀或邮箱筛选…"
+                  aria-label="按收件地址筛选收件箱"
+                  autocomplete="off"
+                />
+              </div>
+              <label class="inline-check-toggle" for="inbox-unread-only">
+                <input type="checkbox" id="inbox-unread-only" />
+                <span>仅未读</span>
+              </label>
+              <button type="button" class="btn btn-secondary" id="inbox-refresh">刷新收件箱</button>
+              <button type="button" class="btn" id="open-watch-modal" hidden>临时监听</button>
+            </div>
+          </div>
+
+          <div class="watches-strip" id="active-watches-bar" hidden>
+            <div class="watches-strip-header">
+              <span id="watches-header-icon" aria-hidden="true"></span>
+              <span>活动临时监听槽位</span>
+              <span class="badge badge-accent count-badge" id="watches-count">0</span>
+              <span class="hint">（点击地址可筛选对应邮件）</span>
+            </div>
+            <div class="watches-list" id="watches-list"></div>
+          </div>
+
+          <div class="table-wrap" id="inbox-table-wrap">
+            <table class="data-table" aria-labelledby="inbox-section-title">
+              <thead>
+                <tr>
+                  <th scope="col">收件人</th>
+                  <th scope="col">发件人</th>
+                  <th scope="col">主题</th>
+                  <th scope="col">状态</th>
+                  <th scope="col" class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="inbox-rows"></tbody>
+            </table>
+          </div>
+          <div id="inbox-state-host" hidden></div>
+
+          <div class="pagination-bar" id="inbox-more-bar" hidden>
+            <span class="page-meta" id="inbox-more-summary">已加载 0 封</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="inbox-load-more">加载更多邮件</button>
+          </div>
+        </section>
+
+        <!-- 工作区 3：租户访问令牌（仅 Admin） -->
+        <section class="card section-card" id="tokens-card" role="tabpanel" aria-labelledby="tab-btn-tokens" hidden>
+          <div class="section-toolbar">
+            <div class="section-heading">
+              <div class="section-title-row">
+                <h2 class="section-title" id="tokens-section-title">租户访问令牌</h2>
+                <span class="badge badge-muted count-badge" id="token-count">0</span>
+              </div>
+              <p class="section-subtitle">租户仅可配置已授权邮箱的转发规则，无权读取收件箱邮件或删除规则</p>
+            </div>
+            <div class="toolbar-controls">
+              <div class="search-box toolbar-search">
+                <span id="token-search-icon" aria-hidden="true"></span>
+                <input
+                  id="token-search"
+                  class="input"
+                  type="search"
+                  placeholder="搜索租户备注或授权邮箱…"
+                  aria-label="搜索访问令牌"
+                  autocomplete="off"
+                />
+              </div>
+              <button type="button" class="btn" id="open-token-modal">新增访问令牌</button>
+            </div>
+          </div>
+
+          <div id="token-issued-banner" class="issued-banner" role="status" hidden></div>
+
+          <div class="table-wrap" id="tokens-table-wrap">
+            <table class="data-table" aria-labelledby="tokens-section-title">
+              <thead>
+                <tr>
+                  <th scope="col">租户备注 / 凭证标识</th>
+                  <th scope="col">已授权邮箱</th>
+                  <th scope="col">状态与有效期</th>
+                  <th scope="col" class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="tokens-rows"></tbody>
+            </table>
+          </div>
+          <div id="tokens-state-host" hidden></div>
+        </section>
+
+        <!-- 工作区 4：投递日志（Admin & Tenant） -->
+        <section class="card section-card" id="logs-card" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
+          <div class="section-toolbar">
+            <div class="section-heading">
+              <div class="section-title-row">
+                <h2 class="section-title" id="logs-section-title">最近投递日志</h2>
+                <span class="badge badge-muted count-badge" id="logs-count">0</span>
+              </div>
+              <p class="section-subtitle" id="logs-subtitle">展示最近 50 封入站邮件的路由与转发结果</p>
+            </div>
+            <div class="toolbar-controls">
+              <div class="search-box toolbar-search">
+                <span id="log-search-icon" aria-hidden="true"></span>
+                <input
+                  id="log-search"
+                  class="input"
+                  type="search"
+                  placeholder="搜索发件人、收件人或主题…"
+                  aria-label="搜索投递日志"
+                  autocomplete="off"
+                />
+              </div>
+              <div id="log-status-select"></div>
+            </div>
+          </div>
+
+          <div class="table-wrap" id="logs-table-wrap">
+            <table class="data-table" aria-labelledby="logs-section-title">
+              <thead>
+                <tr>
+                  <th scope="col">收件人</th>
+                  <th scope="col">发件人</th>
+                  <th scope="col" id="logs-subject-th">主题</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">时间</th>
+                </tr>
+              </thead>
+              <tbody id="logs"></tbody>
+            </table>
+          </div>
+          <div id="logs-state-host" hidden></div>
+
+          <div class="pagination-bar" id="logs-pagination">
+            <span class="page-meta" id="logs-page-summary">共 0 条</span>
+            <div class="pagination-controls">
+              <span>每页</span>
+              <div id="logs-page-size-select"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="logs-page-prev" disabled>上一页</button>
+              <span class="page-indicator" id="logs-page-indicator">1 / 1</span>
+              <button type="button" class="btn btn-secondary btn-sm" id="logs-page-next" disabled>下一页</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 模态框 1：新增 / 编辑规则 -->
+    <div class="modal-backdrop" id="rule-modal" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header">
+          <h3 id="modal-title">新增规则</h3>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" id="modal-close" aria-label="关闭弹窗"></button>
+        </div>
+
+        <div id="modal-form-error" class="error-banner" role="alert" hidden></div>
+
+        <div class="field">
+          <label for="modal-addr">收件地址前缀</label>
+          <div class="input-suffix" id="modal-addr-group">
+            <input id="modal-addr" class="input" placeholder="如 support 或 vip01" autocomplete="off" />
+            <span class="suffix" id="modal-domain-suffix">@example.com</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="modal-new-target">转发目标邮箱</label>
+          <div class="form-inline-row stack-mobile">
+            <input
+              id="modal-new-target"
+              class="input"
+              placeholder="输入目标邮箱（支持逗号分隔多个），按回车添加"
+              autocomplete="off"
+            />
+            <button type="button" class="btn btn-secondary" id="modal-add-target">添加目标</button>
+          </div>
+          <div class="target-list" id="modal-target-list"></div>
+        </div>
+
+        <div class="field">
+          <div class="panel-subtle">
+            <div class="switch-header-row">
+              <div>
+                <div class="switch-title">开启临时收件箱暂存</div>
+                <p class="hint">将入站邮件正文、验证码与链接暂存 30 分钟；开启后转发目标可留空。</p>
+              </div>
+              <label class="switch" aria-label="开启临时收件箱暂存">
+                <input type="checkbox" id="modal-inbox-enabled" />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="modal-divider">
+              <label for="modal-allowed-senders">发件人白名单（可选，逗号分隔域名或完整邮箱）</label>
+              <div style="margin-top: 6px">
+                <input
+                  id="modal-allowed-senders"
+                  class="input"
+                  placeholder="留空表示不限发件人；例如 anthropic.com, github.com"
+                  autocomplete="off"
+                />
+              </div>
+            </div>
+
+            <div class="modal-divider" id="modal-key-section" hidden>
+              <span class="field-label">单邮箱访问密钥（供终端用户登录或调用 /api/inbox）</span>
+              <div id="modal-key-content" style="margin-top: 6px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="modal-cancel">取消</button>
+          <button type="button" class="btn" id="modal-save">保存规则</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 2：新增 / 编辑访问令牌 -->
+    <div class="modal-backdrop" id="token-modal" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tok-modal-title">
+        <div class="modal-header">
+          <h3 id="tok-modal-title">新增访问令牌</h3>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" id="tok-modal-close" aria-label="关闭弹窗"></button>
+        </div>
+
+        <div id="tok-form-error" class="error-banner" role="alert" hidden></div>
+
+        <div class="field">
+          <label for="tok-modal-name">租户或团队备注名称</label>
+          <input id="tok-modal-name" class="input" placeholder="如 客服组 / 合作伙伴 A" autocomplete="off" />
+        </div>
+
+        <div class="field">
+          <span class="field-label" id="tok-mselect-label">授权管理邮箱</span>
+          <div class="mselect" id="tok-addr-mselect">
+            <div
+              class="mselect-trigger"
+              id="tok-mselect-trigger"
+              role="combobox"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-controls="tok-mselect-list"
+              aria-labelledby="tok-mselect-label"
+              tabindex="0"
+            >
+              <div class="mselect-tags" id="tok-mselect-tags"></div>
+              <div class="mselect-meta">
+                <span class="mselect-count" id="tok-mselect-count" hidden>0</span>
+                <span id="tok-mselect-chevron" aria-hidden="true"></span>
+              </div>
+            </div>
+
+            <div class="mselect-popover" id="tok-mselect-popover" hidden>
+              <div class="mselect-search-row">
+                <span id="tok-mselect-search-icon" aria-hidden="true"></span>
+                <input
+                  id="tok-mselect-search"
+                  class="input input-sm mselect-search-input"
+                  type="search"
+                  placeholder="筛选已有规则，或输入新前缀回车创建…"
+                  aria-label="筛选或新增授权邮箱"
+                  autocomplete="off"
+                />
+              </div>
+              <div
+                class="mselect-list"
+                id="tok-mselect-list"
+                role="listbox"
+                aria-multiselectable="true"
+                aria-labelledby="tok-mselect-label"
+              ></div>
+              <div class="mselect-footer">
+                <span class="tabular" id="tok-mselect-summary">共 0 条</span>
+                <div class="mselect-footer-actions">
+                  <button type="button" class="mselect-link-btn" id="tok-mselect-select-all">全选筛选</button>
+                  <button type="button" class="mselect-link-btn is-danger" id="tok-mselect-clear">清空已选</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="hint">
+            检索勾选已有规则；输入未存在的前缀（自动补全 <code id="tok-domain-suffix">@example.com</code>）可在下拉菜单中直接新建授权。
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="tok-modal-expires">到期时间（留空为永不过期）</label>
+          <div class="form-inline-row">
+            <input id="tok-modal-expires" class="input" type="datetime-local" />
+            <button type="button" class="btn btn-secondary" id="tok-modal-clear-expires">设为永不过期</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="panel-subtle">
+            <div class="switch-header-row">
+              <div>
+                <div class="switch-title">启用此访问令牌</div>
+                <p class="hint">暂停后该令牌立即无法访问，保留其已关联的授权邮箱列表。</p>
+              </div>
+              <label class="switch" aria-label="启用此访问令牌">
+                <input type="checkbox" id="tok-modal-enabled" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="tok-modal-cancel">取消</button>
+          <button type="button" class="btn" id="tok-modal-save">保存令牌</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 2.2：查看令牌全部已授权邮箱 -->
+    <div class="modal-backdrop" id="tok-addrs-modal" aria-hidden="true">
+      <div class="modal tok-addrs-dialog" role="dialog" aria-modal="true" aria-labelledby="tok-addrs-modal-title">
+        <div class="modal-header">
+          <div class="section-title-row">
+            <h3 id="tok-addrs-modal-title">已授权邮箱</h3>
+            <span class="badge badge-accent count-badge" id="tok-addrs-modal-count">0</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" id="tok-addrs-modal-close" aria-label="关闭弹窗"></button>
+        </div>
+
+        <div class="search-box" style="margin-bottom: var(--space-3)">
+          <span id="tok-addrs-search-icon" aria-hidden="true"></span>
+          <input
+            id="tok-addrs-search"
+            class="input"
+            type="search"
+            placeholder="搜索已授权邮箱…"
+            aria-label="搜索已授权邮箱"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="tok-addrs-modal-list" id="tok-addrs-modal-list"></div>
+
+        <div class="modal-footer tok-addrs-footer">
+          <button type="button" class="btn btn-secondary btn-sm" id="tok-addrs-copy-all">复制全部邮箱</button>
+          <div class="row-actions">
+            <button type="button" class="btn btn-secondary" id="tok-addrs-edit-btn">编辑授权</button>
+            <button type="button" class="btn" id="tok-addrs-done-btn">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 2.5：开启一次性临时收件监听槽位（仅 Admin） -->
+    <div class="modal-backdrop" id="watch-modal" aria-hidden="true">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="watch-modal-title">
+        <div class="modal-header">
+          <h3 id="watch-modal-title">开启临时监听槽位</h3>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" id="watch-modal-close" aria-label="关闭弹窗"></button>
+        </div>
+
+        <div id="watch-form-error" class="error-banner" role="alert" hidden></div>
+
+        <div class="field">
+          <label for="watch-modal-addr">临时收件地址前缀</label>
+          <div class="input-suffix" id="watch-addr-group">
+            <input
+              id="watch-modal-addr"
+              class="input"
+              placeholder="如 temp-signup 或 verify01"
+              autocomplete="off"
+            />
+            <span class="suffix" id="watch-domain-suffix">@example.com</span>
+          </div>
+          <p class="hint">
+            无需创建长期转发规则：在监听有效期内发往该地址的邮件将自动暂存至临时收件箱，到期后自动失效。
+          </p>
+        </div>
+
+        <div class="field">
+          <span class="field-label">监听保留时长</span>
+          <div id="watch-ttl-select"></div>
+        </div>
+
+        <div class="field">
+          <label for="watch-modal-senders">发件人白名单（可选，逗号分隔域名或完整邮箱）</label>
+          <input
+            id="watch-modal-senders"
+            class="input"
+            placeholder="留空不限；例如 anthropic.com, github.com"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="watch-modal-cancel">取消</button>
+          <button type="button" class="btn" id="watch-modal-save">开启监听</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 3：邮件详情 -->
+    <div class="modal-backdrop" id="msg-modal" aria-hidden="true">
+      <div class="modal msg-dialog" role="dialog" aria-modal="true" aria-labelledby="msg-modal-title">
+        <div class="modal-header">
+          <h3 id="msg-modal-title">邮件详情</h3>
+          <button type="button" class="btn btn-ghost btn-icon btn-sm" id="msg-modal-close" aria-label="关闭弹窗"></button>
+        </div>
+        <div class="msg-meta-grid" id="msg-modal-meta"></div>
+        <div class="msg-section" id="msg-modal-codes" hidden></div>
+        <div class="msg-section" id="msg-modal-links" hidden></div>
+        <div class="field">
+          <span class="field-label">纯文本正文</span>
+          <pre class="msg-pre" id="msg-modal-body"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模态框 4：顶层异步确认框 -->
+    <div class="modal-backdrop confirm-layer" id="confirm-modal" aria-hidden="true">
+      <div
+        class="modal confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-message"
+      >
+        <div class="modal-header" style="margin-bottom: 6px">
+          <h3 id="confirm-title">确认操作</h3>
+        </div>
+        <div class="confirm-body" id="confirm-message"></div>
+        <div class="modal-footer" style="margin-top: 0">
+          <button type="button" class="btn btn-secondary" id="confirm-cancel">取消</button>
+          <button type="button" class="btn btn-danger-solid" id="confirm-ok">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 全局状态通知 -->
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <script>
+/*__CFM_INLINE_SCRIPT__*/
+    </script>
+  </body>
+</html>

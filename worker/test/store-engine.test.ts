@@ -189,3 +189,129 @@ test("temporary watch slot accepts mail without rule until TTL expires", async (
   assert.equal(expiredPlan.action, "reject");
   assert.equal(expiredPlan.reason, "no rule");
 });
+
+test("tenant token CRUD auto-initializes placeholder rules, enforces enabled & expiresAt, and rotates key", async () => {
+  let now = 1_700_000_000_000;
+  const engine = new ForwardStoreEngine(new MemoryStorage(), () => now);
+
+  // Creating token with new addresses auto-creates placeholder rules that safely reject mail until configured
+  const created = await engine.createTenantToken(
+    {
+      name: "客服组",
+      addresses: ["s1", "s2@my.domain"],
+      expiresAt: now + 3600_000,
+    },
+    "my.domain",
+  );
+  assert.ok(!("error" in created));
+  assert.equal(created.name, "客服组");
+  assert.match(created.token, /^cfmt_[0-9a-f]{32}$/);
+  assert.deepEqual(created.addresses, ["s1@my.domain", "s2@my.domain"]);
+  assert.equal(created.enabled, true);
+
+  // Placeholder rule exists and rejects incoming mail cleanly
+  const r1 = await engine.getRule("s1", "my.domain");
+  assert.ok(r1);
+  assert.deepEqual(r1.targets, []);
+  assert.equal(r1.inboxEnabled, undefined);
+  const plan = await engine.resolveDeliveryPlan("s1@my.domain", "a@b.com");
+  assert.deepEqual(plan, { action: "reject", reason: "all destinations disabled" });
+
+  // Active token resolves
+  const resolved1 = await engine.resolveTenantToken(created.token);
+  assert.equal(resolved1?.id, created.id);
+
+  // Disabling token prevents resolution; re-enabling restores it
+  const disabled = await engine.updateTenantToken(
+    created.id,
+    { enabled: false },
+    "my.domain",
+  );
+  assert.ok(!("error" in disabled));
+  assert.equal(await engine.resolveTenantToken(created.token), null);
+
+  await engine.updateTenantToken(created.id, { enabled: true }, "my.domain");
+  assert.equal((await engine.resolveTenantToken(created.token))?.id, created.id);
+
+  // Rotating token invalidates old cfmt_ secret immediately
+  const oldSecret = created.token;
+  const rotated = await engine.rotateTenantToken(created.id);
+  assert.ok(!("error" in rotated));
+  assert.notEqual(rotated.token, oldSecret);
+  assert.equal(await engine.resolveTenantToken(oldSecret), null);
+  assert.equal((await engine.resolveTenantToken(rotated.token))?.id, created.id);
+
+  // Advancing past expiresAt invalidates resolution unless expiresAt is cleared
+  now += 3601_000;
+  assert.equal(await engine.resolveTenantToken(rotated.token), null);
+  await engine.updateTenantToken(created.id, { expiresAt: null }, "my.domain");
+  assert.equal((await engine.resolveTenantToken(rotated.token))?.id, created.id);
+
+  // Deleting token invalidates secret without deleting underlying rules
+  assert.equal(await engine.deleteTenantToken(created.id), true);
+  assert.equal(await engine.resolveTenantToken(rotated.token), null);
+  assert.ok(await engine.getRule("s1", "my.domain"));
+});
+
+test("deleteRule cascades to tenant token addresses and cleans up inbox messages", async () => {
+  const engine = new ForwardStoreEngine(new MemoryStorage());
+
+  await engine.setRule("a1", [], "my.domain", { inboxEnabled: true });
+  await engine.saveInboxMessage({
+    from: "x@y.com",
+    to: "a1@my.domain",
+    subject: "Code 123456",
+    messageId: "<m1>",
+    text: "123456",
+    links: [],
+    codes: ["123456"],
+  });
+
+  const tok = await engine.createTenantToken(
+    { name: "租户1", addresses: ["a1", "a2"] },
+    "my.domain",
+  );
+  assert.ok(!("error" in tok));
+  assert.deepEqual(tok.addresses, ["a1@my.domain", "a2@my.domain"]);
+
+  // Delete rule a1 -> purged from inbox and removed from tok.addresses
+  assert.equal(await engine.deleteRule("a1", "my.domain"), true);
+  const remainingMsgs = await engine.queryInbox({ address: "a1@my.domain" });
+  assert.equal(remainingMsgs.length, 0);
+
+  const updatedTok = await engine.getTenantToken(tok.id);
+  assert.deepEqual(updatedTok?.addresses, ["a2@my.domain"]);
+});
+
+test("listLogs filters by allowedAddresses and redacts subject when requested", async () => {
+  let now = 1_700_000_000_000;
+  const engine = new ForwardStoreEngine(new MemoryStorage(), () => now);
+
+  await engine.logDelivery({
+    from: "s@x.com",
+    to: "a1@my.domain",
+    subject: "Your OTP is 889900",
+    messageId: "<1>",
+    forwardedTo: ["dest@x.com"],
+  });
+  now += 1000;
+  await engine.logDelivery({
+    from: "s@x.com",
+    to: "other@my.domain",
+    subject: "Other secret",
+    messageId: "<2>",
+    forwardedTo: ["dest2@x.com"],
+  });
+
+  const tenantLogs = await engine.listLogs(50, {
+    allowedAddresses: ["a1@my.domain"],
+    redactSubject: true,
+  });
+  assert.equal(tenantLogs.length, 1);
+  assert.equal(tenantLogs[0].to, "a1@my.domain");
+  assert.equal(tenantLogs[0].subject, "");
+
+  const adminLogs = await engine.listLogs(50);
+  assert.equal(adminLogs.length, 2);
+  assert.equal(adminLogs[1].subject, "Your OTP is 889900");
+});

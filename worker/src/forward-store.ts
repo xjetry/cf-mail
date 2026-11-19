@@ -12,6 +12,12 @@ import {
   type InboxMessage,
   type DeliveryPlan,
   type DeliveryLogEntry,
+  type TenantToken,
+  type CreateTenantTokenInput,
+  type UpdateTenantTokenInput,
+  type ListLogsOptions,
+  type PaginatedInboxResult,
+  type PaginatedLogsResult,
 } from "./store-engine.ts";
 
 export {
@@ -26,6 +32,12 @@ export {
   type InboxMessage,
   type DeliveryPlan,
   type DeliveryLogEntry,
+  type TenantToken,
+  type CreateTenantTokenInput,
+  type UpdateTenantTokenInput,
+  type ListLogsOptions,
+  type PaginatedInboxResult,
+  type PaginatedLogsResult,
 };
 
 export class ForwardStore extends DurableObject {
@@ -102,6 +114,41 @@ export class ForwardStore extends DurableObject {
     return await this.engine.deleteRule(address, domain);
   }
 
+  async listTenantTokens(): Promise<TenantToken[]> {
+    return await this.engine.listTenantTokens();
+  }
+
+  async getTenantToken(id: string): Promise<TenantToken | null> {
+    return await this.engine.getTenantToken(id);
+  }
+
+  async createTenantToken(
+    input: CreateTenantTokenInput,
+    domain?: string,
+  ): Promise<TenantToken | { error: string }> {
+    return await this.engine.createTenantToken(input, domain);
+  }
+
+  async updateTenantToken(
+    id: string,
+    patch: UpdateTenantTokenInput,
+    domain?: string,
+  ): Promise<TenantToken | { error: string }> {
+    return await this.engine.updateTenantToken(id, patch, domain);
+  }
+
+  async rotateTenantToken(id: string): Promise<TenantToken | { error: string }> {
+    return await this.engine.rotateTenantToken(id);
+  }
+
+  async deleteTenantToken(id: string): Promise<boolean> {
+    return await this.engine.deleteTenantToken(id);
+  }
+
+  async resolveTenantToken(rawToken: string): Promise<TenantToken | null> {
+    return await this.engine.resolveTenantToken(rawToken);
+  }
+
   async getDestinations(address: string): Promise<string[] | null> {
     return await this.engine.getDestinations(address);
   }
@@ -122,6 +169,10 @@ export class ForwardStore extends DurableObject {
 
   async unwatchAddress(address: string, domain?: string): Promise<boolean> {
     return await this.engine.unwatchAddress(address, domain);
+  }
+
+  async listWatches(): Promise<WatchSlot[]> {
+    return await this.engine.listWatches();
   }
 
   async resolveDeliveryPlan(
@@ -154,8 +205,21 @@ export class ForwardStore extends DurableObject {
     consume?: boolean;
     limit?: number;
     includeHtml?: boolean;
+    cursor?: string;
   }): Promise<InboxMessage[]> {
     return await this.engine.queryInbox(opts);
+  }
+
+  async queryInboxPage(opts: {
+    address?: string;
+    unreadOnly?: boolean;
+    sinceMs?: number;
+    consume?: boolean;
+    limit?: number;
+    includeHtml?: boolean;
+    cursor?: string;
+  }): Promise<PaginatedInboxResult> {
+    return await this.engine.queryInboxPage(opts);
   }
 
   async ackInboxMessage(address: string, id: string): Promise<boolean> {
@@ -181,7 +245,17 @@ export class ForwardStore extends DurableObject {
     await this.engine.logDelivery(entry);
   }
 
-  async listLogs(limit = 50): Promise<DeliveryLogEntry[]> {
-    return await this.engine.listLogs(limit);
+  async listLogs(
+    limit = 50,
+    opts?: ListLogsOptions,
+  ): Promise<DeliveryLogEntry[]> {
+    return await this.engine.listLogs(limit, opts);
+  }
+
+  async listLogsPage(
+    limit = 50,
+    opts?: ListLogsOptions,
+  ): Promise<PaginatedLogsResult> {
+    return await this.engine.listLogsPage(limit, opts);
   }
 }

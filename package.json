@@ -6,7 +6,8 @@
     "cli"
   ],
   "scripts": {
-    "build": "npm run build -w cli && npm run typecheck -w worker",
+    "build": "npm run build:ui -w worker && npm run build -w cli && npm run typecheck -w cli && npm run typecheck -w worker",
+    "test": "node --experimental-strip-types --test worker/test/*.test.ts",
     "dev": "npm run dev -w worker",
     "check-token": "npm run build -w cli --silent && node scripts/deploy.mjs --check-only",
     "deploy": "npm run build && node scripts/deploy.mjs",

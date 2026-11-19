@@ -18,6 +18,10 @@
 - **目标邮箱独立开关**：同一规则下添加多个目标邮箱时，支持在列表或弹窗中一键暂停/启用其中某一个或某几个目标，无需删除规则。
 - **目标邮箱验证状态检查**：保存规则时自动检查各目标是否已在 Cloudflare Destination Addresses 中验证（`message.forward()` 只能发往已验证地址），未验证目标在规则弹窗中直观标注，并可一键发送/重发验证邮件；CLI 提供 `check-dest` / `verify-dest` 命令。
 - **投递失败可观测**：全部目标转发失败时日志标记 `rejected` 并记录错误详情，部分失败原因也会在 Web 日志与 CLI 中展示。
+- **多租户三角色权限隔离**：
+  - **管理员 (`ADMIN_TOKEN`)**：管理全部邮箱规则、全局收件箱、全局日志，以及创建/启停/轮换/删除租户管理员访问令牌 (`cfmt_...`)。
+  - **租户管理员 (`cfmt_...`)**：仅可管理管理员授权的前缀邮箱规则（配置转发目标、开启/关闭临时收件箱、编辑发件人白名单、复制/重置/吊销 `cfmk_...`），**严格禁止读取临时收件箱邮件、禁止新建未授权地址或删除规则**；仅可查看已授权邮箱的脱敏投递日志（服务端隐去邮件主题）。
+  - **单邮箱用户 (`cfmk_...`)**：支持通过 `https://mail.example.com/?key=cfmk_...` 直达进入 Web 收件箱视图（自动擦除地址栏密钥且标签页会话隔离防顶号），仅可读取该邮箱临时收件箱、展开纯文本正文与全部链接、复制验证码与自助重置 `inbox-key`。
 - **Web 管理面板**：
   - 收件地址后缀自动固定补全（只需输入前缀，如 `hello`）。
   - 实时动态搜索过滤（同时匹配收件地址与所有目标邮箱）+ 分页浏览（支持 10/20/50 条/页）。
@@ -189,28 +193,34 @@ cfmctl inbox claude01 --unread --consume
 | 命令 | 说明 |
 |---|---|
 | `health` | 检查 Worker `/admin/healthz` 连通性 |
-| `list` | 列出全部转发/收件箱规则及各目标启用状态（暂停的目标标注 `(off)`） |
+| `whoami` | 查看当前凭证对应的角色身份（`admin` / `tenant` / `user`）及授权范围 |
+| `token <subcmd>` | 【仅管理员】管理租户管理员令牌（`list` / `get` / `create` / `set` / `rotate` / `enable` / `disable` / `delete`） |
+| `list` | 列出规则（管理员看全部，租户管理员看授权邮箱；暂停的目标标注 `(off)`） |
 | `get <address>` | 查看单条规则 JSON（含 `inboxKey`） |
-| `set <address> [--inbox] [--allow-from d1,d2] [dest...]` | 新增或覆盖规则（支持 `--inbox` 零转发目标模式与发件人域名白名单） |
-| `key <address> [--rotate \| --revoke]` | 查看、重置轮换或吊销单前缀独立收件箱查询 Key (`cfmk_...`) |
-| `inbox [address] [--unread] [--consume]` | 查看临时收件箱邮件（自动提取 Magic-Link 与 6 位验证码） |
-| `watch <address> [--ttl SEC] [--allow-from d1,d2]` | 开启一次性临时收件监听槽位（默认 30 分钟） |
-| `unwatch <address>` | 关闭临时收件监听槽位 |
+| `set <address> [--inbox \| --no-inbox] [--allow-from d1,d2] [dest...]` | 新增或覆盖规则（租户管理员仅可修改已授权邮箱配置） |
+| `key [address] [--rotate \| --revoke]` | 查看、重置或吊销收件箱 Key（持 `cfmk_` 用户凭证可直接 `--rotate` 自助重置） |
+| `inbox [address] [--unread] [--consume]` | 查看临时收件箱邮件（管理员查全局/按地址；`cfmk_` 用户查本邮箱；租户管理员不可调用） |
+| `watch <address> [--ttl SEC] [--allow-from d1,d2]` | 【仅管理员】开启一次性临时收件监听槽位（默认 30 分钟） |
+| `unwatch <address>` | 【仅管理员】关闭临时收件监听槽位 |
 | `enable <address> <dest>` | 启用某条规则下的指定目标邮箱 |
 | `disable <address> <dest>` | 暂停某条规则下的指定目标邮箱 |
-| `delete <address>` | 删除规则（同时立即作废其独立 `inboxKey`） |
-| `logs [limit]` | 查看最近投递日志（最多保留最近 200 条；拒信与部分失败均展示原因） |
+| `delete <address>` | 【仅管理员】删除规则（同时作废 `inboxKey`、清理残留收件箱并从租户令牌移除） |
+| `logs [limit]` | 查看最近投递日志（租户管理员仅见已授权邮箱且隐藏邮件主题） |
 | `check-dest <dest...>` | 检查目标邮箱的 Cloudflare 验证状态（`verified` / `pending` / `missing` / `unknown`） |
 | `verify-dest <dest>` | 向目标邮箱发送/重发 Cloudflare 验证邮件（已验证则跳过） |
 | `check-token [domain]` | 检测 Cloudflare API Token 是否具备全部部署权限并输出 `fix_hint` |
 
-### 单邮箱程序化轮询接口 (`/api/inbox`)
+### 单邮箱用户直达与程序化接口 (`/api/inbox`)
 
-为开启收件箱的前缀生成的 `cfmk_...` 凭证严格绑定单个邮箱，无法访问其他邮箱或 `/admin/*` 管理接口：
+为开启收件箱的前缀生成的 `cfmk_...` 凭证严格绑定单个邮箱，既可通过浏览器打开 `https://mail.example.com/?key=cfmk_your_prefix_key` 直达用户收件箱页面，也可直接调用 HTTP 接口：
 
 ```bash
-# 拉取未读邮件并原子标记为已消费（防止重复登录时拿到上一封失效的 Magic-Link）
+# 1. 拉取未读邮件并原子标记为已消费（防止重复登录时拿到上一封失效的 Magic-Link）
 curl -s "https://mail.example.com/api/inbox?unread=1&consume=1" \
+  -H "Authorization: Bearer cfmk_your_prefix_key"
+
+# 2. 用户自助重置当前邮箱专属 Key（旧 Key 立即作废）
+curl -s -X POST "https://mail.example.com/api/inbox/rotate-key" \
   -H "Authorization: Bearer cfmk_your_prefix_key"
 ```
 

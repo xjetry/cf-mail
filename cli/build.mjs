@@ -48,10 +48,19 @@ function generateSkillMarkdown(schema) {
     .map((c) => `- **\`${c.command}\`**：${c.agentNotes}`)
     .join("\n");
 
+  const authLabel = (auth) => {
+    if (!auth) return "公开";
+    if (auth === "admin") return "ADMIN_TOKEN";
+    if (auth === "adminOrTenant") return "ADMIN_TOKEN / cfmt_";
+    if (auth === "inboxKey") return "cfmk_ (Bearer / ?key=)";
+    if (auth === "anyToken") return "ADMIN_TOKEN / cfmt_ / cfmk_";
+    return "Bearer Token";
+  };
+
   const apiTable = schema.endpoints
     .map(
       (e) =>
-        `| \`${e.method} ${e.path}\` | ${e.auth ? "Bearer Token" : "公开"} | ${e.summary} | \`${e.requestBody ?? "-"}\` | \`${e.responseBody}\` |`,
+        `| \`${e.method} ${e.path}\` | ${authLabel(e.auth)} | ${e.summary} | \`${e.requestBody ?? "-"}\` | \`${e.responseBody}\` |`,
     )
     .join("\n");
 

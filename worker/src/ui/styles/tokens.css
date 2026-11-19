@@ -1,0 +1,197 @@
+/* ==========================================================================
+   cf-mail Design System — Global Tokens (Batch A)
+   Principles:
+   - Surface elevation via luminance steps + subtle specular inner borders in dark mode
+   - Crisp border & key/ambient shadow hierarchy in light mode
+   - WCAG 2.1 AA contrast (>= 4.5:1 text, >= 3.0:1 active control boundaries)
+   - Locked control heights (28px / 36px / 40px) & concentric corner radii
+   ========================================================================== */
+
+:root,
+:root[data-theme="dark"] {
+  /* Surface Luminance Hierarchy (strictly ascending Y) */
+  --bg-canvas: #0b0f17;
+  --bg-control: #0e131d;
+  --bg-surface: #121824;
+  --bg-subtle: #171f2e;
+  --bg-elevated: #1b2436;
+  --bg-hover: rgba(148, 163, 184, 0.08);
+  --bg-active: rgba(148, 163, 184, 0.14);
+
+  /* Borders & Specular Highlights */
+  --border-subtle: #1e283b;
+  --border-default: #29364e;
+  --border-control: #3a4b6b;
+  --border-strong: #51668f;
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+
+  /* Typography Hierarchy */
+  --text-primary: #edf2f9;
+  --text-secondary: #a8b5ca;
+  --text-muted: #8696b0;
+
+  /* Brand / Primary Action (>= 4.5:1 AA) */
+  --accent-solid: #2563eb;
+  --accent-solid-hover: #1d4ed8;
+  --accent-on-solid: #ffffff;
+  --accent-text: #60a5fa;
+  --accent-soft: rgba(59, 130, 246, 0.14);
+  --accent-border: rgba(96, 165, 250, 0.36);
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px #60a5fa;
+
+  /* Semantic Status: Success / Active */
+  --ok-solid: #10b981;
+  --ok-text: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.12);
+  --ok-border: rgba(52, 211, 153, 0.34);
+
+  /* Semantic Status: Warning / Pending */
+  --warn-text: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-border: rgba(251, 191, 36, 0.34);
+
+  /* Semantic Status: Danger / Destructive */
+  --danger-solid: #dc2626;
+  --danger-solid-hover: #b91c1c;
+  --danger-on-solid: #ffffff;
+  --danger-text: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.13);
+  --danger-border: rgba(248, 113, 113, 0.36);
+
+  /* Switch & Backdrop */
+  --switch-off-bg: #263349;
+  --switch-off-border: #485b7d;
+  --switch-thumb: #f8fafc;
+  --backdrop-bg: rgba(5, 8, 14, 0.74);
+
+  /* Shadows (minimal in dark mode; rely on luminance + inner highlight) */
+  --shadow-card: var(--inner-highlight);
+  --shadow-popover: var(--inner-highlight), 0 12px 28px -4px rgba(0, 0, 0, 0.5);
+  --shadow-modal: var(--inner-highlight), 0 20px 44px -8px rgba(0, 0, 0, 0.62);
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  /* Surface Hierarchy (distinct subtle vs white surface & active white controls) */
+  --bg-canvas: #f5f7fb;
+  --bg-control: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-subtle: #eff3f9;
+  --bg-elevated: #ffffff;
+  --bg-hover: rgba(15, 23, 42, 0.045);
+  --bg-active: rgba(15, 23, 42, 0.08);
+
+  /* Borders */
+  --border-subtle: #e4eaf3;
+  --border-default: #d5dfec;
+  --border-control: #b6c4d6;
+  --border-strong: #8496ae;
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+  /* Typography Hierarchy (>= 4.5:1 AA across surface & subtle) */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #516175;
+
+  /* Brand / Primary Action */
+  --accent-solid: #2563eb;
+  --accent-solid-hover: #1d4ed8;
+  --accent-on-solid: #ffffff;
+  --accent-text: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --accent-border: #93c5fd;
+  --focus-ring: 0 0 0 2px var(--bg-surface), 0 0 0 4px #2563eb;
+
+  /* Semantic Status: Success / Active */
+  --ok-solid: #059669;
+  --ok-text: #047857;
+  --ok-soft: #ecfdf5;
+  --ok-border: #6ee7b7;
+
+  /* Semantic Status: Warning / Pending */
+  --warn-text: #b45309;
+  --warn-soft: #fffbeb;
+  --warn-border: #fcd34d;
+
+  /* Semantic Status: Danger / Destructive */
+  --danger-solid: #dc2626;
+  --danger-solid-hover: #b91c1c;
+  --danger-on-solid: #ffffff;
+  --danger-text: #b91c1c;
+  --danger-soft: #fef2f2;
+  --danger-border: #fca5a5;
+
+  /* Switch & Backdrop */
+  --switch-off-bg: #dbe3ef;
+  --switch-off-border: #8b9cb5;
+  --switch-thumb: #ffffff;
+  --backdrop-bg: rgba(15, 23, 42, 0.44);
+
+  /* Shadows */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-popover: 0 10px 24px -4px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-modal: 0 20px 44px -8px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06);
+
+  color-scheme: light;
+}
+
+/* Geometry, Typography, Spacing & Motion Tokens */
+:root {
+  /* Fonts */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Typographic Scale */
+  --text-xs: 0.75rem;     /* 12px */
+  --text-sm: 0.8125rem;   /* 13px */
+  --text-base: 0.875rem;  /* 14px */
+  --text-md: 1rem;        /* 16px */
+  --text-lg: 1.125rem;    /* 18px */
+  --text-xl: 1.25rem;     /* 20px */
+
+  /* Spacing Scale (4px grid) */
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Locked Interactive Control Heights */
+  --ctrl-sm: 28px;
+  --ctrl-md: 36px;
+  --ctrl-lg: 40px;
+
+  /* Concentric Corner Radii: R_outer = R_inner + Padding (floor 5px-6px)
+     - Popover/Tabs: R_outer 10px = R_inner 6px + Padding 4px
+     - Target Row:   R_outer 11px = R_inner 5px + Padding 6px
+     - Card/Panel:   R_outer 12px, Padding >= 12px -> R_inner floor 6px
+     - Modal:        R_outer 16px, Padding 20px    -> sub-panel 12px / control floor 6px */
+  --radius-xs: 5px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-row: 11px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* Disciplined Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

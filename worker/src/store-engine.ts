@@ -28,6 +28,54 @@ export type RuleInboxOptions = {
   allowedSenders?: string[];
   /** 显式指定是否生成 key（默认当 inboxEnabled=true 且尚无 key 时自动生成） */
   generateKey?: boolean;
+  /** 是否允许转发目标为空且未开启临时收件箱（用于管理员预分配初始规则或租户关闭收件箱） */
+  allowEmptyTargets?: boolean;
+};
+
+export type TenantToken = {
+  id: string;
+  name: string;
+  /** 明文 cfmt_<32hex>，供管理员随时复制分发 */
+  token: string;
+  /** 授权管理的收件地址列表（小写规范化） */
+  addresses: string[];
+  enabled: boolean;
+  /** 可选过期时间（epoch ms） */
+  expiresAt?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateTenantTokenInput = {
+  name: string;
+  addresses: string[];
+  enabled?: boolean;
+  expiresAt?: number;
+};
+
+export type UpdateTenantTokenInput = {
+  name?: string;
+  addresses?: string[];
+  enabled?: boolean;
+  expiresAt?: number | null;
+};
+
+export type ListLogsOptions = {
+  allowedAddresses?: string[];
+  redactSubject?: boolean;
+  cursor?: string;
+};
+
+export type PaginatedInboxResult = {
+  messages: InboxMessage[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+export type PaginatedLogsResult = {
+  logs: DeliveryLogEntry[];
+  nextCursor: string | null;
+  hasMore: boolean;
 };
 
 export type ForwardRule = {
@@ -95,6 +143,8 @@ export type DeliveryLogEntry = {
 
 const RULE_PREFIX = "rule:";
 const IKEY_PREFIX = "ikey:";
+const TOKEN_PREFIX = "token:";
+const TKEY_PREFIX = "tkey:";
 const WATCH_PREFIX = "watch:";
 const INBOX_PREFIX = "inbox:";
 const LOG_PREFIX = "log:";
@@ -176,15 +226,31 @@ function ikeyKey(token: string): string {
   return IKEY_PREFIX + token.trim();
 }
 
+function tokenRecordKey(id: string): string {
+  return TOKEN_PREFIX + id.trim();
+}
+
+function tkeyKey(token: string): string {
+  return TKEY_PREFIX + token.trim();
+}
+
 function inboxPrefixFor(address: string): string {
   return `${INBOX_PREFIX}${normalizeAddress(address)}:`;
 }
 
-function generateInboxKey(): string {
+function generateRandomToken(prefix: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `cfmk_${hex}`;
+  return `${prefix}_${hex}`;
+}
+
+function generateInboxKey(): string {
+  return generateRandomToken("cfmk");
+}
+
+function generateTenantSecret(): string {
+  return generateRandomToken("cfmt");
 }
 
 function normalizeSenders(senders?: string[]): string[] | undefined {
@@ -317,7 +383,10 @@ export class ForwardStoreEngine {
         ? Boolean(options.inboxEnabled)
         : Boolean(existing?.inboxEnabled);
 
-    const parsed = normalizeTargets(destinations, inboxEnabled);
+    const parsed = normalizeTargets(
+      destinations,
+      inboxEnabled || Boolean(options?.allowEmptyTargets),
+    );
     if ("error" in parsed) return parsed;
 
     const allowedSenders =
@@ -379,6 +448,7 @@ export class ForwardStoreEngine {
           ? options.allowedSenders
           : oldRule?.allowedSenders,
       generateKey: options?.generateKey,
+      allowEmptyTargets: options?.allowEmptyTargets,
     };
 
     const saved = await this.setRule(newNorm, destinations, domain, mergedOpts);
@@ -389,6 +459,23 @@ export class ForwardStoreEngine {
         await this.storage.delete(ikeyKey(oldRule.inboxKey));
       }
       await this.storage.delete(ruleKey(oldNorm, domain));
+      // 同步重命名所有关联租户令牌中的邮箱地址
+      const tokenEntries = await this.storage.list<TenantToken>({
+        prefix: TOKEN_PREFIX,
+      });
+      const nowIso = new Date(this.nowFn()).toISOString();
+      for (const [key, tok] of tokenEntries.entries()) {
+        if (Array.isArray(tok.addresses) && tok.addresses.includes(oldNorm)) {
+          const nextAddrs = [
+            ...new Set(tok.addresses.map((a) => (a === oldNorm ? newNorm : a))),
+          ].sort((a, b) => a.localeCompare(b));
+          await this.storage.put(key, {
+            ...tok,
+            addresses: nextAddrs,
+            updatedAt: nowIso,
+          });
+        }
+      }
     }
     return saved;
   }
@@ -477,11 +564,240 @@ export class ForwardStoreEngine {
     address: string,
     domain = DEFAULT_DOMAIN,
   ): Promise<boolean> {
-    const existing = await this.getRule(address, domain);
+    const normalized = normalizeRecipient(address, domain);
+    const existing = await this.getRule(normalized, domain);
     if (existing?.inboxKey) {
       await this.storage.delete(ikeyKey(existing.inboxKey));
     }
-    return Boolean(await this.storage.delete(ruleKey(address, domain)));
+    const deleted = Boolean(
+      await this.storage.delete(ruleKey(normalized, domain)),
+    );
+    if (deleted) {
+      // 清理该邮箱下残留的临时收件箱邮件
+      const inboxEntries = await this.storage.list({
+        prefix: inboxPrefixFor(normalized),
+      });
+      if (inboxEntries.size > 0) {
+        await this.storage.delete([...inboxEntries.keys()]);
+      }
+      // 级联从所有租户令牌的授权列表中移除该地址
+      const tokenEntries = await this.storage.list<TenantToken>({
+        prefix: TOKEN_PREFIX,
+      });
+      const nowIso = new Date(this.nowFn()).toISOString();
+      for (const [key, tok] of tokenEntries.entries()) {
+        if (
+          Array.isArray(tok.addresses) &&
+          tok.addresses.includes(normalized)
+        ) {
+          await this.storage.put(key, {
+            ...tok,
+            addresses: tok.addresses.filter((a) => a !== normalized),
+            updatedAt: nowIso,
+          });
+        }
+      }
+    }
+    return deleted;
+  }
+
+  // ---------------- tenant tokens (cfmt_...) ----------------
+
+  private normalizeAuthorizedAddresses(
+    inputs: string[],
+    domain = DEFAULT_DOMAIN,
+  ): { addresses: string[] } | { error: string } {
+    const set = new Set<string>();
+    for (const raw of inputs) {
+      const trimmed = String(raw ?? "").trim();
+      if (!trimmed) continue;
+      const norm = normalizeRecipient(trimmed, domain);
+      if (!isValidAddress(norm)) {
+        return { error: `invalid address: ${raw}` };
+      }
+      set.add(norm);
+    }
+    return { addresses: [...set].sort((a, b) => a.localeCompare(b)) };
+  }
+
+  private async ensurePlaceholderRules(
+    addresses: string[],
+    domain = DEFAULT_DOMAIN,
+  ): Promise<void> {
+    const nowIso = new Date(this.nowFn()).toISOString();
+    for (const addr of addresses) {
+      const existing = await this.getRule(addr, domain);
+      if (!existing) {
+        const placeholder: ForwardRule = {
+          address: addr,
+          destinations: [],
+          targets: [],
+          updatedAt: nowIso,
+        };
+        await this.storage.put(ruleKey(addr, domain), placeholder);
+      }
+    }
+  }
+
+  async listTenantTokens(): Promise<TenantToken[]> {
+    const entries = await this.storage.list<TenantToken>({
+      prefix: TOKEN_PREFIX,
+    });
+    const list = [...entries.values()];
+    list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return list;
+  }
+
+  async getTenantToken(id: string): Promise<TenantToken | null> {
+    if (!id.trim()) return null;
+    const tok = await this.storage.get<TenantToken>(tokenRecordKey(id));
+    return tok ?? null;
+  }
+
+  async createTenantToken(
+    input: CreateTenantTokenInput,
+    domain = DEFAULT_DOMAIN,
+  ): Promise<TenantToken | { error: string }> {
+    const name = String(input.name ?? "").trim();
+    if (!name) {
+      return { error: "name is required" };
+    }
+    if (!Array.isArray(input.addresses)) {
+      return { error: "addresses (array) is required" };
+    }
+    const parsed = this.normalizeAuthorizedAddresses(input.addresses, domain);
+    if ("error" in parsed) return parsed;
+
+    if (
+      input.expiresAt !== undefined &&
+      (!Number.isFinite(input.expiresAt) || input.expiresAt <= 0)
+    ) {
+      return { error: "invalid expiresAt" };
+    }
+
+    await this.ensurePlaceholderRules(parsed.addresses, domain);
+
+    const nowIso = new Date(this.nowFn()).toISOString();
+    const id = crypto.randomUUID();
+    const secret = generateTenantSecret();
+    const record: TenantToken = {
+      id,
+      name,
+      token: secret,
+      addresses: parsed.addresses,
+      enabled: input.enabled !== false,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    if (input.expiresAt !== undefined) {
+      record.expiresAt = input.expiresAt;
+    }
+
+    await this.storage.put(tokenRecordKey(id), record);
+    await this.storage.put(tkeyKey(secret), id);
+    return record;
+  }
+
+  async updateTenantToken(
+    id: string,
+    patch: UpdateTenantTokenInput,
+    domain = DEFAULT_DOMAIN,
+  ): Promise<TenantToken | { error: string }> {
+    const existing = await this.getTenantToken(id);
+    if (!existing) {
+      return { error: "not found" };
+    }
+
+    let name = existing.name;
+    if (patch.name !== undefined) {
+      const trimmed = String(patch.name).trim();
+      if (!trimmed) return { error: "name must not be empty" };
+      name = trimmed;
+    }
+
+    let addresses = existing.addresses;
+    if (patch.addresses !== undefined) {
+      if (!Array.isArray(patch.addresses)) {
+        return { error: "addresses must be an array" };
+      }
+      const parsed = this.normalizeAuthorizedAddresses(patch.addresses, domain);
+      if ("error" in parsed) return parsed;
+      addresses = parsed.addresses;
+      await this.ensurePlaceholderRules(addresses, domain);
+    }
+
+    const enabled =
+      patch.enabled !== undefined ? Boolean(patch.enabled) : existing.enabled;
+
+    let expiresAt = existing.expiresAt;
+    if (patch.expiresAt === null) {
+      expiresAt = undefined;
+    } else if (patch.expiresAt !== undefined) {
+      if (!Number.isFinite(patch.expiresAt) || patch.expiresAt <= 0) {
+        return { error: "invalid expiresAt" };
+      }
+      expiresAt = patch.expiresAt;
+    }
+
+    const { expiresAt: _oldExp, ...rest } = existing;
+    const updated: TenantToken = {
+      ...rest,
+      name,
+      addresses,
+      enabled,
+      updatedAt: new Date(this.nowFn()).toISOString(),
+    };
+    if (expiresAt !== undefined) {
+      updated.expiresAt = expiresAt;
+    }
+
+    await this.storage.put(tokenRecordKey(existing.id), updated);
+    return updated;
+  }
+
+  async rotateTenantToken(
+    id: string,
+  ): Promise<TenantToken | { error: string }> {
+    const existing = await this.getTenantToken(id);
+    if (!existing) {
+      return { error: "not found" };
+    }
+    if (existing.token) {
+      await this.storage.delete(tkeyKey(existing.token));
+    }
+    const nextSecret = generateTenantSecret();
+    const updated: TenantToken = {
+      ...existing,
+      token: nextSecret,
+      updatedAt: new Date(this.nowFn()).toISOString(),
+    };
+    await this.storage.put(tkeyKey(nextSecret), existing.id);
+    await this.storage.put(tokenRecordKey(existing.id), updated);
+    return updated;
+  }
+
+  async deleteTenantToken(id: string): Promise<boolean> {
+    const existing = await this.getTenantToken(id);
+    if (!existing) return false;
+    if (existing.token) {
+      await this.storage.delete(tkeyKey(existing.token));
+    }
+    return Boolean(await this.storage.delete(tokenRecordKey(existing.id)));
+  }
+
+  async resolveTenantToken(rawToken: string): Promise<TenantToken | null> {
+    const clean = rawToken.trim();
+    if (!clean.startsWith("cfmt_")) return null;
+    const id = await this.storage.get<string>(tkeyKey(clean));
+    if (!id) return null;
+    const tok = await this.getTenantToken(id);
+    if (!tok || tok.token !== clean || !tok.enabled) {
+      return null;
+    }
+    if (tok.expiresAt !== undefined && tok.expiresAt <= this.nowFn()) {
+      return null;
+    }
+    return tok;
   }
 
   async getDestinations(address: string): Promise<string[] | null> {
@@ -531,6 +847,27 @@ export class ForwardStoreEngine {
       return null;
     }
     return slot;
+  }
+
+  async listWatches(): Promise<WatchSlot[]> {
+    const now = this.nowFn();
+    const entries = await this.storage.list<WatchSlot>({
+      prefix: WATCH_PREFIX,
+    });
+    const expiredKeys: string[] = [];
+    const active: WatchSlot[] = [];
+    for (const [key, slot] of entries.entries()) {
+      if (slot.expiresAt <= now) {
+        expiredKeys.push(key);
+      } else {
+        active.push(slot);
+      }
+    }
+    if (expiredKeys.length > 0) {
+      await this.storage.delete(expiredKeys);
+    }
+    active.sort((a, b) => a.address.localeCompare(b.address));
+    return active;
   }
 
   // ---------------- delivery resolution ----------------
@@ -645,7 +982,21 @@ export class ForwardStoreEngine {
     consume?: boolean;
     limit?: number;
     includeHtml?: boolean;
+    cursor?: string;
   }): Promise<InboxMessage[]> {
+    const page = await this.queryInboxPage(opts);
+    return page.messages;
+  }
+
+  async queryInboxPage(opts: {
+    address?: string;
+    unreadOnly?: boolean;
+    sinceMs?: number;
+    consume?: boolean;
+    limit?: number;
+    includeHtml?: boolean;
+    cursor?: string;
+  }): Promise<PaginatedInboxResult> {
     const now = this.nowFn();
     const maxLimit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
     const prefix = opts.address
@@ -677,12 +1028,27 @@ export class ForwardStoreEngine {
       await this.storage.delete(expiredKeys);
     }
 
-    // 若跨多个邮箱查询（无 address），按时间倒序排列
-    if (!opts.address) {
-      matched.sort((a, b) => b.msg.ts.localeCompare(a.msg.ts));
+    // Total descending order on (ts, id) for deterministic cursor pagination
+    matched.sort(
+      (a, b) =>
+        b.msg.ts.localeCompare(a.msg.ts) || b.msg.id.localeCompare(a.msg.id),
+    );
+
+    let afterCursor = matched;
+    if (opts.cursor) {
+      const sep = opts.cursor.indexOf("|");
+      if (sep > 0) {
+        const curTs = opts.cursor.slice(0, sep);
+        const curId = opts.cursor.slice(sep + 1);
+        afterCursor = matched.filter(
+          ({ msg }) =>
+            msg.ts < curTs || (msg.ts === curTs && msg.id < curId),
+        );
+      }
     }
 
-    const sliced = matched.slice(0, maxLimit);
+    const hasMore = afterCursor.length > maxLimit;
+    const sliced = afterCursor.slice(0, maxLimit);
     const readIso = new Date(now).toISOString();
     const result: InboxMessage[] = [];
 
@@ -700,7 +1066,10 @@ export class ForwardStoreEngine {
       }
     }
 
-    return result;
+    const last = result[result.length - 1];
+    const nextCursor = hasMore && last ? `${last.ts}|${last.id}` : null;
+
+    return { messages: result, nextCursor, hasMore };
   }
 
   async ackInboxMessage(address: string, id: string): Promise<boolean> {
@@ -765,16 +1134,70 @@ export class ForwardStoreEngine {
     await this.pruneLogs();
   }
 
-  async listLogs(limit = 50): Promise<DeliveryLogEntry[]> {
+  async listLogs(
+    limit = 50,
+    opts?: ListLogsOptions,
+  ): Promise<DeliveryLogEntry[]> {
+    const page = await this.listLogsPage(limit, opts);
+    return page.logs;
+  }
+
+  async listLogsPage(
+    limit = 50,
+    opts?: ListLogsOptions,
+  ): Promise<PaginatedLogsResult> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const hasFilter = opts?.allowedAddresses !== undefined;
+    const allowedSet = hasFilter
+      ? new Set(opts!.allowedAddresses!.map(normalizeAddress))
+      : null;
+
+    if (allowedSet && allowedSet.size === 0) {
+      return { logs: [], nextCursor: null, hasMore: false };
+    }
+
+    let curTs = "";
+    let curId = "";
+    if (opts?.cursor) {
+      const sep = opts.cursor.indexOf("|");
+      if (sep > 0) {
+        curTs = opts.cursor.slice(0, sep);
+        curId = opts.cursor.slice(sep + 1);
+      }
+    }
+
     const entries = await this.storage.list<DeliveryLogEntry>({
       prefix: LOG_PREFIX,
-      limit: Math.min(Math.max(limit, 1), 200),
+      limit: LOG_MAX,
       reverse: true,
     });
-    return [...entries.values()].map((entry) => ({
-      ...entry,
-      subject: decodeMimeWords(entry.subject ?? ""),
-    }));
+
+    const out: DeliveryLogEntry[] = [];
+    for (const entry of entries.values()) {
+      if (allowedSet && !allowedSet.has(normalizeAddress(entry.to))) {
+        continue;
+      }
+      if (
+        curTs &&
+        !(entry.ts < curTs || (entry.ts === curTs && entry.id < curId))
+      ) {
+        continue;
+      }
+      out.push({
+        ...entry,
+        subject: opts?.redactSubject
+          ? ""
+          : decodeMimeWords(entry.subject ?? ""),
+      });
+      if (out.length > clampedLimit) break;
+    }
+
+    const hasMore = out.length > clampedLimit;
+    const logs = hasMore ? out.slice(0, clampedLimit) : out;
+    const last = logs[logs.length - 1];
+    const nextCursor = hasMore && last ? `${last.ts}|${last.id}` : null;
+
+    return { logs, nextCursor, hasMore };
   }
 
   private async pruneLogs(): Promise<void> {
