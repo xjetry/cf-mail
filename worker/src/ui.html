@@ -1483,7 +1483,7 @@ button {
 }
 
 .modal.msg-dialog {
-  max-width: 640px;
+  max-width: 780px;
 }
 
 .modal-header {
@@ -2550,42 +2550,106 @@ button {
 }
 
 .msg-section {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
-.msg-links-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: var(--space-1-5);
+.msg-body-field {
+  margin-bottom: 0;
 }
 
-.msg-link-row {
+.msg-body-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
-.msg-link-row > .code-pill {
-  flex: 1;
-  min-width: 0;
+.msg-body-header .field-label {
+  margin-bottom: 0;
 }
 
-.msg-pre {
-  margin: var(--space-1-5) 0 0;
+.msg-view-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+}
+
+.msg-view-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.msg-view-tab:hover {
+  color: var(--text-primary);
+}
+
+.msg-view-tab.is-active {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+.msg-view-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.msg-render-wrap {
   width: 100%;
-  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background-color: #ffffff;
+  overflow: hidden;
+}
+
+.msg-render-frame {
+  display: block;
+  width: 100%;
+  height: min(560px, 60vh);
+  min-height: 320px;
+  border: 0;
+  background-color: #ffffff;
+}
+
+.msg-plain-body {
+  width: 100%;
+  padding: var(--space-4);
   border-radius: var(--radius-md);
   background-color: var(--bg-control);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.6;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 320px;
+  max-height: min(560px, 60vh);
+  min-height: 180px;
   overflow-y: auto;
+}
+
+.msg-plain-body a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.msg-plain-body a:hover {
+  opacity: 0.85;
 }
 
 /* ==========================================================================
@@ -3360,10 +3424,24 @@ button {
         </div>
         <div class="msg-meta-grid" id="msg-modal-meta"></div>
         <div class="msg-section" id="msg-modal-codes" hidden></div>
-        <div class="msg-section" id="msg-modal-links" hidden></div>
-        <div class="field">
-          <span class="field-label">纯文本正文</span>
-          <pre class="msg-pre" id="msg-modal-body"></pre>
+        <div class="field msg-body-field">
+          <div class="msg-body-header">
+            <span class="field-label" id="msg-modal-body-label">邮件内容</span>
+            <div class="msg-view-tabs" id="msg-modal-view-tabs" role="group" aria-label="邮件正文视图切换" hidden>
+              <button type="button" class="msg-view-tab is-active" id="msg-view-html" aria-pressed="true">渲染视图</button>
+              <button type="button" class="msg-view-tab" id="msg-view-text" aria-pressed="false">纯文本</button>
+            </div>
+          </div>
+          <div class="msg-render-wrap" id="msg-modal-html-wrap" hidden>
+            <iframe
+              id="msg-modal-iframe"
+              class="msg-render-frame"
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              referrerpolicy="no-referrer"
+              title="邮件正文渲染预览"
+            ></iframe>
+          </div>
+          <div class="msg-plain-body" id="msg-modal-body" hidden></div>
         </div>
       </div>
     </div>
@@ -3899,6 +3977,58 @@ button {
       }
       pointerStartedOnBackdrop = false;
     });
+  }
+  var EMAIL_PREVIEW_HEAD_INJECT = `<meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:;"><base target="_blank"><style>html,body{background-color:#ffffff;color:#1f2937;}body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6;overflow-wrap:break-word;}img{max-width:100%;height:auto;}table{max-width:100%;}pre{white-space:pre-wrap;overflow-wrap:anywhere;}</style>`;
+  function buildEmailPreviewSrcdoc(rawHtml) {
+    const cleaned = String(rawHtml ?? "").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<script\b[\s\S]*$/gi, "").replace(/<(iframe|object|embed|applet)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<(iframe|object|embed|applet)\b[^>]*\/?>/gi, "").replace(
+      /<meta\b[^>]*http-equiv\s*=\s*(?:"[^"]*refresh[^"]*"|'[^']*refresh[^']*'|[^\s>]*refresh[^\s>]*)[^>]*>/gi,
+      ""
+    ).replace(/<base\b[^>]*>/gi, "").replace(
+      /(<a\b[^>]*?)\s+target\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+      "$1"
+    );
+    if (/<head\b[^>]*>/i.test(cleaned)) {
+      return cleaned.replace(
+        /<head\b[^>]*>/i,
+        (match) => `${match}${EMAIL_PREVIEW_HEAD_INJECT}`
+      );
+    }
+    if (/<html\b[^>]*>/i.test(cleaned)) {
+      return cleaned.replace(
+        /<html\b[^>]*>/i,
+        (match) => `${match}<head>${EMAIL_PREVIEW_HEAD_INJECT}</head>`
+      );
+    }
+    if (/<body\b[^>]*>/i.test(cleaned)) {
+      return `<!doctype html><html><head>${EMAIL_PREVIEW_HEAD_INJECT}</head>${cleaned}</html>`;
+    }
+    return `<!doctype html><html><head>${EMAIL_PREVIEW_HEAD_INJECT}</head><body>${cleaned}</body></html>`;
+  }
+  function renderPlainTextWithLinks(container, text) {
+    container.textContent = "";
+    const content = text || "(\u65E0\u6B63\u6587\u5185\u5BB9)";
+    const urlRe = /https?:\/\/[^\s<>"'`)\]]+/gi;
+    let lastIndex = 0;
+    let match;
+    while ((match = urlRe.exec(content)) !== null) {
+      const start = match.index;
+      const rawUrl = match[0].replace(/[.,;:!?]+$/, "");
+      if (start > lastIndex) {
+        container.appendChild(
+          document.createTextNode(content.slice(lastIndex, start))
+        );
+      }
+      const a = document.createElement("a");
+      a.href = rawUrl;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = rawUrl;
+      container.appendChild(a);
+      lastIndex = start + rawUrl.length;
+    }
+    if (lastIndex < content.length) {
+      container.appendChild(document.createTextNode(content.slice(lastIndex)));
+    }
   }
 
   // src/ui/types.ts
@@ -5626,17 +5756,41 @@ button {
           }
         };
       }
-      case "MESSAGE_MODAL_OPEN":
+      case "MESSAGE_MODAL_OPEN": {
+        const hasHtml = Boolean(
+          event.message.html && event.message.html.trim().length > 0
+        );
         return {
           ...state,
           primaryModal: {
             tag: "message",
             modal: {
               messageId: event.message.id,
-              snapshot: event.message
+              snapshot: event.message,
+              viewMode: hasHtml ? "html" : "text"
             }
           }
         };
+      }
+      case "MESSAGE_MODAL_VIEW_MODE_SET": {
+        if (state.primaryModal.tag !== "message") return state;
+        const m = state.primaryModal.modal;
+        const hasHtml = Boolean(
+          m.snapshot.html && m.snapshot.html.trim().length > 0
+        );
+        if (event.viewMode === "html" && !hasHtml) return state;
+        if (m.viewMode === event.viewMode) return state;
+        return {
+          ...state,
+          primaryModal: {
+            tag: "message",
+            modal: {
+              ...m,
+              viewMode: event.viewMode
+            }
+          }
+        };
+      }
       case "MESSAGE_MODAL_CLOSE":
         if (state.primaryModal.tag !== "message") return state;
         return { ...state, primaryModal: { tag: "none" } };
@@ -6286,6 +6440,8 @@ button {
     return pill;
   }
   var sectionMemo = {};
+  var tokenDropdownListMemo = null;
+  var renderedIframeMessageId = null;
   function depsChanged(prev, next) {
     if (!prev || prev.length !== next.length) return true;
     for (let i = 0; i < next.length; i++) {
@@ -7324,6 +7480,13 @@ button {
     watchBackdrop.setAttribute("aria-hidden", String(!isWatch));
     msgBackdrop.classList.toggle("open", isMsg);
     msgBackdrop.setAttribute("aria-hidden", String(!isMsg));
+    if (state.primaryModal.tag !== "token") {
+      tokenDropdownListMemo = null;
+    }
+    if (state.primaryModal.tag !== "message" && renderedIframeMessageId !== null) {
+      $("msg-modal-iframe").srcdoc = "";
+      renderedIframeMessageId = null;
+    }
     if (state.primaryModal.tag === "rule") {
       renderRuleModalContent(state, state.primaryModal.modal, actions);
     } else if (state.primaryModal.tag === "token") {
@@ -7333,7 +7496,7 @@ button {
     } else if (state.primaryModal.tag === "watch") {
       renderWatchModalContent(state.primaryModal.modal, syncSelects.watchTtl);
     } else if (state.primaryModal.tag === "message") {
-      renderMessageModalContent(state.primaryModal.modal.snapshot, actions);
+      renderMessageModalContent(state.primaryModal.modal, actions);
     }
   }
   function renderTokenAddrsModalContent(state, modal, actions) {
@@ -7687,55 +7850,77 @@ button {
     }
     searchInput.disabled = submitting;
     setInputValueSafe(searchInput, modal.dropdown.filterQuery);
-    listHost.innerHTML = "";
+    if (!isOpen) {
+      tokenDropdownListMemo = null;
+    }
     if (ddModel.options.length === 0) {
+      tokenDropdownListMemo = null;
+      listHost.innerHTML = "";
       const empty = document.createElement("div");
       empty.className = "mselect-empty";
       empty.textContent = state.rules.resource.status !== "ready" ? "\u89C4\u5219\u5217\u8868\u52A0\u8F7D\u4E2D\uFF0C\u53EF\u76F4\u63A5\u8F93\u5165\u65B0\u90AE\u7BB1\u524D\u7F00\u56DE\u8F66\u521B\u5EFA\u2026" : modal.dropdown.filterQuery.trim() ? "\u672A\u5339\u914D\u5230\u5DF2\u6709\u89C4\u5219\uFF1B\u8F93\u5165\u5408\u6CD5\u90AE\u7BB1\u524D\u7F00\u53EF\u76F4\u63A5\u65B0\u5EFA\u5E76\u6388\u6743" : "\u6682\u65E0\u5DF2\u6709\u8F6C\u53D1\u89C4\u5219\uFF0C\u5728\u4E0A\u65B9\u8F93\u5165\u65B0\u90AE\u7BB1\u524D\u7F00\u5373\u53EF\u521B\u5EFA\u5E76\u6388\u6743";
       listHost.appendChild(empty);
       searchInput.removeAttribute("aria-activedescendant");
     } else {
-      ddModel.options.forEach((opt, idx) => {
-        const row = document.createElement("div");
-        const isActive = isOpen && idx === ddModel.activeIndex;
-        const optId = `tok-mselect-opt-${idx}`;
-        row.id = optId;
-        row.setAttribute("role", "option");
-        if (opt.kind === "create") {
-          row.className = "mselect-option is-create" + (isActive ? " is-active" : "");
-          row.setAttribute("aria-selected", "false");
-          row.innerHTML = `
-          <span class="mselect-option-left">
-            <span class="mselect-create-plus" aria-hidden="true">${ICONS.plus}</span>
-            <span class="mselect-option-addr">\u65B0\u5EFA\u5E76\u6388\u6743 ${escapeHtml(opt.label)}</span>
-          </span>
-          <span class="mselect-option-meta">\u4FDD\u5B58\u65F6\u521D\u59CB\u5316\u7A7A\u89C4\u5219</span>
-        `;
-          row.onmouseenter = () => actions.onTokenModalSetActiveIndex(idx);
-          row.onclick = (e) => {
-            e.stopPropagation();
-            actions.onTokenModalAddAddresses(opt.addresses);
-            searchInput.focus();
-          };
-        } else {
-          row.className = "mselect-option" + (opt.selected ? " is-selected" : "") + (isActive ? " is-active" : "");
-          row.setAttribute("aria-selected", String(opt.selected));
-          row.innerHTML = `
-          <span class="mselect-option-left">
-            <span class="mselect-check-box" aria-hidden="true">${ICONS.checkInline}</span>
-            <span class="mselect-option-addr">${escapeHtml(opt.address)}</span>
-          </span>
-          <span class="mselect-option-meta">${escapeHtml(opt.metaLabel)}</span>
-        `;
-          row.onmouseenter = () => actions.onTokenModalSetActiveIndex(idx);
-          row.onclick = (e) => {
-            e.stopPropagation();
-            actions.onTokenModalToggleAddr(opt.address);
-            searchInput.focus();
+      const structureKey = ddModel.options.map(
+        (opt) => opt.kind === "create" ? `create:${opt.label}` : `${opt.kind}:${opt.address}:${opt.metaLabel}`
+      ).join("\n");
+      const canPatchInPlace = tokenDropdownListMemo !== null && tokenDropdownListMemo.structureKey === structureKey && listHost.children.length === ddModel.options.length;
+      if (canPatchInPlace) {
+        ddModel.options.forEach((opt, idx) => {
+          const row = listHost.children[idx];
+          if (!row) return;
+          const isActive = isOpen && idx === ddModel.activeIndex;
+          if (opt.kind === "create") {
+            row.classList.toggle("is-active", isActive);
+          } else {
+            row.classList.toggle("is-selected", opt.selected);
+            row.classList.toggle("is-active", isActive);
+            row.setAttribute("aria-selected", String(opt.selected));
+          }
+        });
+      } else {
+        const keepScroll = tokenDropdownListMemo !== null && tokenDropdownListMemo.filterQuery === modal.dropdown.filterQuery;
+        const prevScrollTop = keepScroll ? listHost.scrollTop : 0;
+        listHost.innerHTML = "";
+        ddModel.options.forEach((opt, idx) => {
+          const row = document.createElement("div");
+          const isActive = isOpen && idx === ddModel.activeIndex;
+          const optId = `tok-mselect-opt-${idx}`;
+          row.id = optId;
+          row.dataset.idx = String(idx);
+          row.setAttribute("role", "option");
+          if (opt.kind === "create") {
+            row.className = "mselect-option is-create" + (isActive ? " is-active" : "");
+            row.setAttribute("aria-selected", "false");
+            row.innerHTML = `
+            <span class="mselect-option-left">
+              <span class="mselect-create-plus" aria-hidden="true">${ICONS.plus}</span>
+              <span class="mselect-option-addr">\u65B0\u5EFA\u5E76\u6388\u6743 ${escapeHtml(opt.label)}</span>
+            </span>
+            <span class="mselect-option-meta">\u4FDD\u5B58\u65F6\u521D\u59CB\u5316\u7A7A\u89C4\u5219</span>
+          `;
+          } else {
+            row.className = "mselect-option" + (opt.selected ? " is-selected" : "") + (isActive ? " is-active" : "");
+            row.setAttribute("aria-selected", String(opt.selected));
+            row.innerHTML = `
+            <span class="mselect-option-left">
+              <span class="mselect-check-box" aria-hidden="true">${ICONS.checkInline}</span>
+              <span class="mselect-option-addr">${escapeHtml(opt.address)}</span>
+            </span>
+            <span class="mselect-option-meta">${escapeHtml(opt.metaLabel)}</span>
+          `;
+          }
+          listHost.appendChild(row);
+        });
+        listHost.scrollTop = prevScrollTop;
+        if (isOpen) {
+          tokenDropdownListMemo = {
+            structureKey,
+            filterQuery: modal.dropdown.filterQuery
           };
         }
-        listHost.appendChild(row);
-      });
+      }
       if (isOpen && ddModel.activeIndex >= 0) {
         searchInput.setAttribute(
           "aria-activedescendant",
@@ -7756,7 +7941,8 @@ button {
     saveBtn.disabled = submitting;
     saveBtn.textContent = submitting ? "\u4FDD\u5B58\u4E2D\u2026" : modal.mode.kind === "add" ? "\u521B\u5EFA\u4EE4\u724C" : "\u4FDD\u5B58\u4FEE\u6539";
   }
-  function renderMessageModalContent(m, actions) {
+  function renderMessageModalContent(modal, actions) {
+    const m = modal.snapshot;
     $("msg-modal-title").textContent = m.subject || "(\u65E0\u4E3B\u9898)";
     $("msg-modal-meta").innerHTML = `
     <span class="msg-meta-key">\u53D1\u4EF6\u4EBA</span>
@@ -7769,7 +7955,7 @@ button {
     const codesBox = $("msg-modal-codes");
     if (Array.isArray(m.codes) && m.codes.length > 0) {
       codesBox.hidden = false;
-      codesBox.innerHTML = `<span class="field-label">\u63D0\u53D6\u51FA\u7684\u9A8C\u8BC1\u7801</span>`;
+      codesBox.innerHTML = `<span class="field-label">\u9A8C\u8BC1\u7801</span>`;
       const bar = document.createElement("div");
       bar.className = "extracted-bar";
       for (const c of m.codes) {
@@ -7787,32 +7973,32 @@ button {
       codesBox.hidden = true;
       codesBox.innerHTML = "";
     }
-    const linksBox = $("msg-modal-links");
-    if (Array.isArray(m.links) && m.links.length > 0) {
-      linksBox.hidden = false;
-      linksBox.innerHTML = `<span class="field-label tabular">\u63D0\u53D6\u51FA\u7684\u94FE\u63A5 (${m.links.length})</span>`;
-      const list = document.createElement("div");
-      list.className = "msg-links-list";
-      for (const lk of m.links) {
-        const row = document.createElement("div");
-        row.className = "msg-link-row";
-        const code = document.createElement("code");
-        code.className = "code-pill";
-        code.textContent = lk;
-        const cbtn = document.createElement("button");
-        cbtn.type = "button";
-        cbtn.className = "btn btn-secondary btn-sm";
-        cbtn.innerHTML = `${ICONS.copy}<span>\u590D\u5236</span>`;
-        cbtn.onclick = () => actions.onCopy(lk, "\u5DF2\u590D\u5236\u94FE\u63A5");
-        row.append(code, cbtn);
-        list.appendChild(row);
+    const hasHtml = Boolean(m.html && m.html.trim().length > 0);
+    const showHtml = hasHtml && modal.viewMode === "html";
+    const viewTabs = $("msg-modal-view-tabs");
+    viewTabs.hidden = !hasHtml;
+    const htmlBtn = $("msg-view-html");
+    const textBtn = $("msg-view-text");
+    htmlBtn.classList.toggle("is-active", showHtml);
+    htmlBtn.setAttribute("aria-pressed", String(showHtml));
+    textBtn.classList.toggle("is-active", !showHtml);
+    textBtn.setAttribute("aria-pressed", String(!showHtml));
+    $("msg-modal-body-label").textContent = hasHtml && !showHtml ? "\u7EAF\u6587\u672C\u6B63\u6587" : "\u90AE\u4EF6\u5185\u5BB9";
+    const htmlWrap = $("msg-modal-html-wrap");
+    const iframe = $("msg-modal-iframe");
+    const plainBody = $("msg-modal-body");
+    if (showHtml) {
+      htmlWrap.hidden = false;
+      plainBody.hidden = true;
+      if (renderedIframeMessageId !== m.id) {
+        iframe.srcdoc = buildEmailPreviewSrcdoc(m.html);
+        renderedIframeMessageId = m.id;
       }
-      linksBox.appendChild(list);
     } else {
-      linksBox.hidden = true;
-      linksBox.innerHTML = "";
+      htmlWrap.hidden = true;
+      plainBody.hidden = false;
+      renderPlainTextWithLinks(plainBody, m.text || "");
     }
-    $("msg-modal-body").textContent = m.text || "(\u65E0\u7EAF\u6587\u672C\u6B63\u6587)";
   }
   function renderConfirmModal(confirm) {
     const backdrop = $("confirm-modal");
@@ -8009,7 +8195,9 @@ button {
       const prevTokDropdownOpen = state.primaryModal.tag === "token" && state.primaryModal.modal.dropdown.open;
       const prevConfirmOpen = state.confirmDialog.tag === "open";
       const activeBeforeRender = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      state = reduceAppState(state, event);
+      const nextState = reduceAppState(state, event);
+      if (nextState === state) return;
+      state = nextState;
       renderApp(state, uiActions, selectSyncCallbacks);
       if (prevAuthTag === "authenticated" && state.auth.tag !== "authenticated") {
         focusStack.closeAll();
@@ -8410,7 +8598,7 @@ button {
         requestId,
         appliedFilter: isUser ? "" : filterVal
       });
-      const url = isUser ? "/api/inbox?limit=20" : "/admin/api/inbox?limit=20" + (filterVal ? "&to=" + encodeURIComponent(filterVal) : "");
+      const url = isUser ? "/api/inbox?limit=20&includeHtml=1" : "/admin/api/inbox?limit=20&includeHtml=1" + (filterVal ? "&to=" + encodeURIComponent(filterVal) : "");
       try {
         const data = await authedApi(url, { signal });
         dispatch({
@@ -8440,7 +8628,7 @@ button {
       const filterVal = state.inbox.appliedFilter.trim();
       const { requestId, signal } = coordinator.startChannel("inbox-more");
       dispatch({ type: "INBOX_LOAD_MORE_START", requestId });
-      const q = new URLSearchParams({ limit: "20", cursor });
+      const q = new URLSearchParams({ limit: "20", includeHtml: "1", cursor });
       if (!isUser && filterVal) q.set("to", filterVal);
       const url = (isUser ? "/api/inbox?" : "/admin/api/inbox?") + q.toString();
       try {
@@ -9072,10 +9260,7 @@ button {
       onDismissTokenBanner: () => dispatch({ type: "TOKENS_DISMISS_BANNER" }),
       onRetryTokens: () => void loadTokens(),
       // Token Modal
-      onTokenModalToggleAddr: (address) => dispatch({ type: "TOKEN_MODAL_TOGGLE_ADDRESS", address }),
-      onTokenModalAddAddresses: (addresses) => dispatch({ type: "TOKEN_MODAL_ADD_ADDRESSES", addresses }),
       onTokenModalRemoveAddr: (address) => dispatch({ type: "TOKEN_MODAL_REMOVE_ADDRESS", address }),
-      onTokenModalSetActiveIndex: (index) => dispatch({ type: "TOKEN_MODAL_ACTIVE_INDEX_SET", index }),
       // Inbox & Watch Slots
       onOpenWatchModal: () => dispatch({ type: "WATCH_MODAL_OPEN" }),
       onFilterInboxByWatch: (address) => {
@@ -9477,6 +9662,44 @@ button {
     $("tok-mselect-popover").addEventListener("click", (e) => {
       e.stopPropagation();
     });
+    $("tok-mselect-list").addEventListener("mousedown", (e) => {
+      if (e.target instanceof Element && e.target.closest(".mselect-option")) {
+        e.preventDefault();
+      }
+    });
+    $("tok-mselect-list").addEventListener("click", (e) => {
+      if (state.primaryModal.tag !== "token") return;
+      const optEl = e.target instanceof Element ? e.target.closest(".mselect-option") : null;
+      if (!optEl) return;
+      e.stopPropagation();
+      const idx = Number(optEl.dataset.idx);
+      const ddModel = selectTokenDropdownModel(state);
+      const chosen = Number.isInteger(idx) ? ddModel.options[idx] : void 0;
+      if (!chosen) return;
+      if (chosen.kind === "create") {
+        dispatch({
+          type: "TOKEN_MODAL_ADD_ADDRESSES",
+          addresses: chosen.addresses
+        });
+      } else {
+        dispatch({
+          type: "TOKEN_MODAL_TOGGLE_ADDRESS",
+          address: chosen.address
+        });
+      }
+      $("tok-mselect-search").focus();
+    });
+    $("tok-mselect-list").addEventListener("mousemove", (e) => {
+      if (state.primaryModal.tag !== "token" || !state.primaryModal.modal.dropdown.open) {
+        return;
+      }
+      const optEl = e.target instanceof Element ? e.target.closest(".mselect-option") : null;
+      if (!optEl) return;
+      const idx = Number(optEl.dataset.idx);
+      if (Number.isInteger(idx) && idx !== state.primaryModal.modal.dropdown.activeIndex) {
+        dispatch({ type: "TOKEN_MODAL_ACTIVE_INDEX_SET", index: idx });
+      }
+    });
     $("tok-mselect-search").addEventListener("input", (e) => {
       dispatch({
         type: "TOKEN_MODAL_FILTER_SET",
@@ -9625,6 +9848,14 @@ button {
     $("msg-modal-close").addEventListener(
       "click",
       () => dispatch({ type: "MESSAGE_MODAL_CLOSE" })
+    );
+    $("msg-view-html").addEventListener(
+      "click",
+      () => dispatch({ type: "MESSAGE_MODAL_VIEW_MODE_SET", viewMode: "html" })
+    );
+    $("msg-view-text").addEventListener(
+      "click",
+      () => dispatch({ type: "MESSAGE_MODAL_VIEW_MODE_SET", viewMode: "text" })
     );
     bindSafeBackdropDismiss(
       $("msg-modal"),

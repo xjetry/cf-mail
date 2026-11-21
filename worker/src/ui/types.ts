@@ -44,6 +44,7 @@ export interface InboxMessage {
   readonly subject: string;
   readonly messageId: string;
   readonly text: string;
+  readonly html?: string;
   readonly links: readonly string[];
   readonly codes: readonly string[];
 }
@@ -291,9 +292,12 @@ export interface OpenWatchModalState {
   readonly validationError?: string;
 }
 
+export type MessageViewMode = "html" | "text";
+
 export interface OpenMessageModalState {
   readonly messageId: string;
   readonly snapshot: InboxMessage;
+  readonly viewMode: MessageViewMode;
 }
 
 export interface OpenTokenAddrsModalState {

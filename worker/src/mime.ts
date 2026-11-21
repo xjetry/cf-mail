@@ -79,6 +79,25 @@ function decodeBase64(input: string, charset: string): string {
   }
 }
 
+function decodeRawBytes(input: string, charset: string): string {
+  let hasHighByte = false;
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    if (code > 0xff) return input; // already decoded UTF-16 string
+    if (code >= 0x80) hasHighByte = true;
+  }
+  if (!hasHighByte) return input;
+  const bytes = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    bytes[i] = input.charCodeAt(i);
+  }
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
 function decodeTransferBody(body: string, encoding: string, charset: string): string {
   const enc = encoding.trim().toLowerCase();
   if (enc === "quoted-printable") {
@@ -87,7 +106,7 @@ function decodeTransferBody(body: string, encoding: string, charset: string): st
   if (enc === "base64") {
     return decodeBase64(body, charset);
   }
-  return body;
+  return decodeRawBytes(body, charset);
 }
 
 function unescapeHtmlEntities(str: string): string {
@@ -238,14 +257,24 @@ function extractCodes(plainText: string): string[] {
   return codes;
 }
 
+function bytesToBinaryString(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let out = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    out += String.fromCharCode(...slice);
+  }
+  return out;
+}
+
 export function parseEmailContent(rawInput: Uint8Array | ArrayBuffer | string): ParsedEmailContent {
   let rawStr: string;
   if (typeof rawInput === "string") {
     rawStr = rawInput;
   } else {
     const bytes = rawInput instanceof Uint8Array ? rawInput : new Uint8Array(rawInput);
-    // 顶层 MIME 结构按 latin1 单字节无损读取，各 part 内部再按各自 charset 解码
-    rawStr = new TextDecoder("latin1").decode(bytes);
+    // 顶层 MIME 结构按严格单字节 0x00-0xFF 无损映射（避免 TextDecoder("latin1") 按 windows-1252 改写 0x80-0x9F）
+    rawStr = bytesToBinaryString(bytes);
   }
 
   const parts = { texts: [] as string[], htmls: [] as string[] };

@@ -106,3 +106,19 @@ test("ranks direct claude.ai links strictly ahead of mail.anthropic.com click-tr
   assert.equal(parsed.links[0], "https://claude.ai/join#direct_token_123");
 });
 
+test("decodes 8bit UTF-8 HTML email bytes cleanly without mojibake", () => {
+  const raw = [
+    "From: Demo <noreply@example.com>",
+    "To: u@example.com",
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    '<html><body><h1>欢迎登录</h1><p>请点击按钮确认邮箱。</p><a href="https://example.com/verify">立即验证</a></body></html>',
+  ].join("\r\n");
+
+  const parsed = parseEmailContent(new TextEncoder().encode(raw));
+  assert.ok(parsed.html.includes("<h1>欢迎登录</h1>"));
+  assert.ok(parsed.html.includes("立即验证"));
+  assert.ok(parsed.text.includes("欢迎登录"));
+});
+

@@ -70,4 +70,26 @@ test("ui.html inline script compiles cleanly, matches source modules, and every 
     !jsCode.includes('method: "PATCH"'),
     "inline rule-row target toggle PATCH should not be invoked from UI list capsules",
   );
+
+  // 5. Verify real HTML email preview iframe & no extracted-links wall in #msg-modal
+  assert.ok(
+    html.includes('id="msg-modal-iframe"'),
+    "expected sandboxed #msg-modal-iframe for real HTML email rendering",
+  );
+  assert.ok(
+    html.includes('sandbox="allow-popups allow-popups-to-escape-sandbox"'),
+    "expected strict sandbox attribute on email preview iframe",
+  );
+  assert.ok(
+    !html.includes('id="msg-modal-links"'),
+    "extracted links wall should not replace real email rendering in #msg-modal",
+  );
+  assert.ok(
+    jsCode.includes("includeHtml=1") || jsCode.includes('includeHtml: "1"'),
+    "inbox requests should request includeHtml for real email rendering",
+  );
+  assert.ok(
+    !jsCode.includes("row.onmouseenter"),
+    "token dropdown options must not attach per-row onmouseenter that rebuilds list DOM",
+  );
 });

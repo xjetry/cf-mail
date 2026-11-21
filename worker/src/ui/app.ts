@@ -268,7 +268,9 @@ function initApp(): void {
         ? document.activeElement
         : null;
 
-    state = reduceAppState(state, event);
+    const nextState = reduceAppState(state, event);
+    if (nextState === state) return;
+    state = nextState;
 
     renderApp(state, uiActions, selectSyncCallbacks);
 
@@ -787,8 +789,8 @@ function initApp(): void {
     });
 
     const url = isUser
-      ? "/api/inbox?limit=20"
-      : "/admin/api/inbox?limit=20" +
+      ? "/api/inbox?limit=20&includeHtml=1"
+      : "/admin/api/inbox?limit=20&includeHtml=1" +
         (filterVal ? "&to=" + encodeURIComponent(filterVal) : "");
 
     try {
@@ -832,7 +834,7 @@ function initApp(): void {
     const { requestId, signal } = coordinator.startChannel("inbox-more");
     dispatch({ type: "INBOX_LOAD_MORE_START", requestId });
 
-    const q = new URLSearchParams({ limit: "20", cursor });
+    const q = new URLSearchParams({ limit: "20", includeHtml: "1", cursor });
     if (!isUser && filterVal) q.set("to", filterVal);
     const url = (isUser ? "/api/inbox?" : "/admin/api/inbox?") + q.toString();
 
@@ -1608,17 +1610,8 @@ function initApp(): void {
     onRetryTokens: () => void loadTokens(),
 
     // Token Modal
-    onTokenModalToggleAddr: (address) =>
-      dispatch({ type: "TOKEN_MODAL_TOGGLE_ADDRESS", address }),
-
-    onTokenModalAddAddresses: (addresses) =>
-      dispatch({ type: "TOKEN_MODAL_ADD_ADDRESSES", addresses }),
-
     onTokenModalRemoveAddr: (address) =>
       dispatch({ type: "TOKEN_MODAL_REMOVE_ADDRESS", address }),
-
-    onTokenModalSetActiveIndex: (index) =>
-      dispatch({ type: "TOKEN_MODAL_ACTIVE_INDEX_SET", index }),
 
     // Inbox & Watch Slots
     onOpenWatchModal: () => dispatch({ type: "WATCH_MODAL_OPEN" }),
@@ -2051,6 +2044,56 @@ function initApp(): void {
   $("tok-mselect-popover").addEventListener("click", (e) => {
     e.stopPropagation();
   });
+  $("tok-mselect-list").addEventListener("mousedown", (e) => {
+    if (e.target instanceof Element && e.target.closest(".mselect-option")) {
+      e.preventDefault();
+    }
+  });
+  $("tok-mselect-list").addEventListener("click", (e) => {
+    if (state.primaryModal.tag !== "token") return;
+    const optEl =
+      e.target instanceof Element
+        ? e.target.closest<HTMLElement>(".mselect-option")
+        : null;
+    if (!optEl) return;
+    e.stopPropagation();
+    const idx = Number(optEl.dataset.idx);
+    const ddModel = selectTokenDropdownModel(state);
+    const chosen = Number.isInteger(idx) ? ddModel.options[idx] : undefined;
+    if (!chosen) return;
+    if (chosen.kind === "create") {
+      dispatch({
+        type: "TOKEN_MODAL_ADD_ADDRESSES",
+        addresses: chosen.addresses,
+      });
+    } else {
+      dispatch({
+        type: "TOKEN_MODAL_TOGGLE_ADDRESS",
+        address: chosen.address,
+      });
+    }
+    $("tok-mselect-search").focus();
+  });
+  $("tok-mselect-list").addEventListener("mousemove", (e) => {
+    if (
+      state.primaryModal.tag !== "token" ||
+      !state.primaryModal.modal.dropdown.open
+    ) {
+      return;
+    }
+    const optEl =
+      e.target instanceof Element
+        ? e.target.closest<HTMLElement>(".mselect-option")
+        : null;
+    if (!optEl) return;
+    const idx = Number(optEl.dataset.idx);
+    if (
+      Number.isInteger(idx) &&
+      idx !== state.primaryModal.modal.dropdown.activeIndex
+    ) {
+      dispatch({ type: "TOKEN_MODAL_ACTIVE_INDEX_SET", index: idx });
+    }
+  });
   $("tok-mselect-search").addEventListener("input", (e) => {
     dispatch({
       type: "TOKEN_MODAL_FILTER_SET",
@@ -2206,6 +2249,12 @@ function initApp(): void {
   // Message Modal Controls
   $("msg-modal-close").addEventListener("click", () =>
     dispatch({ type: "MESSAGE_MODAL_CLOSE" }),
+  );
+  $("msg-view-html").addEventListener("click", () =>
+    dispatch({ type: "MESSAGE_MODAL_VIEW_MODE_SET", viewMode: "html" }),
+  );
+  $("msg-view-text").addEventListener("click", () =>
+    dispatch({ type: "MESSAGE_MODAL_VIEW_MODE_SET", viewMode: "text" }),
   );
   bindSafeBackdropDismiss($("msg-modal"), () =>
     dispatch({ type: "MESSAGE_MODAL_CLOSE" }),

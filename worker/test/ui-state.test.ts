@@ -11,6 +11,7 @@ import {
   selectRulesTableModel,
   selectTokenDropdownModel,
 } from "../src/ui/state.ts";
+import { buildEmailPreviewSrcdoc } from "../src/ui/primitives.ts";
 import type { ForwardRule, InboxMessage } from "../src/ui/types.ts";
 
 const SAMPLE_RULE: ForwardRule = {
@@ -727,4 +728,110 @@ test("SM-6: Token modal filterable multi-select dropdown filters rules, creates 
 
   state = reduceAppState(state, { type: "TOKEN_ADDRS_MODAL_CLOSE" });
   assert.equal(state.primaryModal.tag, "none");
+});
+
+test("Message modal defaults to rendered HTML when available, supports view switching, and sanitizes srcdoc", () => {
+  let state = createInitialAppState();
+  const htmlMsg: InboxMessage = {
+    id: "m-html",
+    ts: "2026-11-21T10:00:00Z",
+    expiresAt: Date.now() + 60_000,
+    read: false,
+    from: "Anthropic <noreply@mail.anthropic.com>",
+    to: "u@acme.dev",
+    subject: "Sign in",
+    messageId: "<html-1>",
+    text: "Sign in at https://claude.ai/magic-link",
+    html: '<html><head><base href="https://evil.example"><meta http-equiv="refresh" content="0;url=https://evil.example"></head><body><script>alert(1)</script><a href="https://claude.ai/magic-link" target="_self">Sign in</a></body></html>',
+    links: ["https://claude.ai/magic-link"],
+    codes: [],
+  };
+
+  state = reduceAppState(state, { type: "MESSAGE_MODAL_OPEN", message: htmlMsg });
+  assert.equal(state.primaryModal.tag, "message");
+  assert.equal(state.primaryModal.modal.viewMode, "html");
+
+  // Switching to text mode and back works; same mode is an exact no-op
+  state = reduceAppState(state, {
+    type: "MESSAGE_MODAL_VIEW_MODE_SET",
+    viewMode: "text",
+  });
+  assert.equal(state.primaryModal.tag, "message");
+  assert.equal(state.primaryModal.modal.viewMode, "text");
+
+  const sameRef = reduceAppState(state, {
+    type: "MESSAGE_MODAL_VIEW_MODE_SET",
+    viewMode: "text",
+  });
+  assert.equal(sameRef, state);
+
+  state = reduceAppState(state, {
+    type: "MESSAGE_MODAL_VIEW_MODE_SET",
+    viewMode: "html",
+  });
+  assert.equal(state.primaryModal.tag, "message");
+  assert.equal(state.primaryModal.modal.viewMode, "html");
+
+  // Plain-text-only message defaults to text mode and ignores html switch
+  const textMsg: InboxMessage = {
+    ...htmlMsg,
+    id: "m-text",
+    html: undefined,
+  };
+  state = reduceAppState(state, { type: "MESSAGE_MODAL_OPEN", message: textMsg });
+  assert.equal(state.primaryModal.tag, "message");
+  assert.equal(state.primaryModal.modal.viewMode, "text");
+  const blockedHtml = reduceAppState(state, {
+    type: "MESSAGE_MODAL_VIEW_MODE_SET",
+    viewMode: "html",
+  });
+  assert.equal(blockedHtml, state);
+
+  // buildEmailPreviewSrcdoc strips active/navigation hazards and injects sandboxed head defaults
+  const srcdoc = buildEmailPreviewSrcdoc(htmlMsg.html!);
+  assert.ok(!/<script\b/i.test(srcdoc), "script tags must be stripped");
+  assert.ok(!/http-equiv\s*=\s*"refresh"/i.test(srcdoc), "meta refresh must be stripped");
+  assert.ok(!/evil\.example/i.test(srcdoc), "original base/refresh URLs must be stripped");
+  assert.ok(srcdoc.includes('<base target="_blank">'));
+  assert.ok(srcdoc.includes('name="referrer" content="no-referrer"'));
+  assert.ok(srcdoc.includes("default-src 'none'"));
+  assert.ok(!/target\s*=\s*"_self"/i.test(srcdoc), "link target=_self must be stripped");
+
+  // HTML fragment without <html>/<head> is wrapped in a complete document
+  const fragDoc = buildEmailPreviewSrcdoc("<div><p>Hello</p><iframe src='https://x.test'></iframe></div>");
+  assert.ok(fragDoc.startsWith("<!doctype html><html><head>"));
+  assert.ok(!/<iframe\b/i.test(fragDoc));
+  assert.ok(fragDoc.includes("<div><p>Hello</p></div>"));
+});
+
+test("SM-6: TOKEN_MODAL_ACTIVE_INDEX_SET is a strict reference no-op when index is unchanged", () => {
+  let state = createInitialAppState();
+  state = reduceAppState(state, { type: "LOGIN_SUBMIT", rawCredential: "adm" });
+  state = reduceAppState(state, {
+    type: "LOGIN_OK",
+    epoch: state.auth.epoch,
+    principal: { role: "admin", domain: "acme.dev", credential: "adm" },
+  });
+  state = reduceAppState(state, { type: "TOKEN_MODAL_OPEN_ADD" });
+  state = reduceAppState(state, { type: "TOKEN_MODAL_DROPDOWN_TOGGLE", open: true });
+
+  const same0 = reduceAppState(state, {
+    type: "TOKEN_MODAL_ACTIVE_INDEX_SET",
+    index: 0,
+  });
+  assert.equal(same0, state);
+
+  state = reduceAppState(state, {
+    type: "TOKEN_MODAL_TOGGLE_ADDRESS",
+    address: "a@acme.dev",
+  });
+  assert.equal(state.primaryModal.tag, "token");
+  assert.deepEqual(state.primaryModal.modal.draft.addresses, ["a@acme.dev"]);
+
+  state = reduceAppState(state, {
+    type: "TOKEN_MODAL_TOGGLE_ADDRESS",
+    address: "a@acme.dev",
+  });
+  assert.equal(state.primaryModal.tag, "token");
+  assert.deepEqual(state.primaryModal.modal.draft.addresses, []);
 });

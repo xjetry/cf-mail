@@ -1,9 +1,11 @@
 import { ICONS } from "./icons.ts";
 import {
+  buildEmailPreviewSrcdoc,
   escapeHtml,
   formatRemainingTtl,
   formatTimestamp,
   maskSecret,
+  renderPlainTextWithLinks,
 } from "./primitives.ts";
 import {
   deriveRuleKeyPanel,
@@ -69,10 +71,7 @@ export interface UiActions {
   onDismissTokenBanner(): void;
   onRetryTokens(): void;
   // Token Modal
-  onTokenModalToggleAddr(address: string): void;
-  onTokenModalAddAddresses(addresses: readonly string[]): void;
   onTokenModalRemoveAddr(address: string): void;
-  onTokenModalSetActiveIndex(index: number): void;
   // Inbox & Watch Slots
   onOpenWatchModal(): void;
   onFilterInboxByWatch(address: string): void;
@@ -267,6 +266,13 @@ const sectionMemo: {
   tokens?: readonly unknown[];
   logs?: readonly unknown[];
 } = {};
+
+let tokenDropdownListMemo: {
+  structureKey: string;
+  filterQuery: string;
+} | null = null;
+
+let renderedIframeMessageId: string | null = null;
 
 function depsChanged(
   prev: readonly unknown[] | undefined,
@@ -1581,6 +1587,14 @@ function renderPrimaryModals(
   msgBackdrop.classList.toggle("open", isMsg);
   msgBackdrop.setAttribute("aria-hidden", String(!isMsg));
 
+  if (state.primaryModal.tag !== "token") {
+    tokenDropdownListMemo = null;
+  }
+  if (state.primaryModal.tag !== "message" && renderedIframeMessageId !== null) {
+    $<HTMLIFrameElement>("msg-modal-iframe").srcdoc = "";
+    renderedIframeMessageId = null;
+  }
+
   if (state.primaryModal.tag === "rule") {
     renderRuleModalContent(state, state.primaryModal.modal, actions);
   } else if (state.primaryModal.tag === "token") {
@@ -1590,7 +1604,7 @@ function renderPrimaryModals(
   } else if (state.primaryModal.tag === "watch") {
     renderWatchModalContent(state.primaryModal.modal, syncSelects.watchTtl);
   } else if (state.primaryModal.tag === "message") {
-    renderMessageModalContent(state.primaryModal.modal.snapshot, actions);
+    renderMessageModalContent(state.primaryModal.modal, actions);
   }
 }
 
@@ -2037,12 +2051,17 @@ function renderTokenModalContent(
     }
   }
 
-  // Sync IME-safe filter input & listbox options
+  // Sync IME-safe filter input & listbox options (patch in place to preserve scroll & prevent DOM thrash on click/hover)
   searchInput.disabled = submitting;
   setInputValueSafe(searchInput, modal.dropdown.filterQuery);
 
-  listHost.innerHTML = "";
+  if (!isOpen) {
+    tokenDropdownListMemo = null;
+  }
+
   if (ddModel.options.length === 0) {
+    tokenDropdownListMemo = null;
+    listHost.innerHTML = "";
     const empty = document.createElement("div");
     empty.className = "mselect-empty";
     empty.textContent =
@@ -2054,53 +2073,84 @@ function renderTokenModalContent(
     listHost.appendChild(empty);
     searchInput.removeAttribute("aria-activedescendant");
   } else {
-    ddModel.options.forEach((opt, idx) => {
-      const row = document.createElement("div");
-      const isActive = isOpen && idx === ddModel.activeIndex;
-      const optId = `tok-mselect-opt-${idx}`;
-      row.id = optId;
-      row.setAttribute("role", "option");
+    const structureKey = ddModel.options
+      .map((opt) =>
+        opt.kind === "create"
+          ? `create:${opt.label}`
+          : `${opt.kind}:${opt.address}:${opt.metaLabel}`,
+      )
+      .join("\n");
 
-      if (opt.kind === "create") {
-        row.className =
-          "mselect-option is-create" + (isActive ? " is-active" : "");
-        row.setAttribute("aria-selected", "false");
-        row.innerHTML = `
-          <span class="mselect-option-left">
-            <span class="mselect-create-plus" aria-hidden="true">${ICONS.plus}</span>
-            <span class="mselect-option-addr">新建并授权 ${escapeHtml(opt.label)}</span>
-          </span>
-          <span class="mselect-option-meta">保存时初始化空规则</span>
-        `;
-        row.onmouseenter = () => actions.onTokenModalSetActiveIndex(idx);
-        row.onclick = (e) => {
-          e.stopPropagation();
-          actions.onTokenModalAddAddresses(opt.addresses);
-          searchInput.focus();
-        };
-      } else {
-        row.className =
-          "mselect-option" +
-          (opt.selected ? " is-selected" : "") +
-          (isActive ? " is-active" : "");
-        row.setAttribute("aria-selected", String(opt.selected));
-        row.innerHTML = `
-          <span class="mselect-option-left">
-            <span class="mselect-check-box" aria-hidden="true">${ICONS.checkInline}</span>
-            <span class="mselect-option-addr">${escapeHtml(opt.address)}</span>
-          </span>
-          <span class="mselect-option-meta">${escapeHtml(opt.metaLabel)}</span>
-        `;
-        row.onmouseenter = () => actions.onTokenModalSetActiveIndex(idx);
-        row.onclick = (e) => {
-          e.stopPropagation();
-          actions.onTokenModalToggleAddr(opt.address);
-          searchInput.focus();
+    const canPatchInPlace =
+      tokenDropdownListMemo !== null &&
+      tokenDropdownListMemo.structureKey === structureKey &&
+      listHost.children.length === ddModel.options.length;
+
+    if (canPatchInPlace) {
+      ddModel.options.forEach((opt, idx) => {
+        const row = listHost.children[idx] as HTMLElement | undefined;
+        if (!row) return;
+        const isActive = isOpen && idx === ddModel.activeIndex;
+        if (opt.kind === "create") {
+          row.classList.toggle("is-active", isActive);
+        } else {
+          row.classList.toggle("is-selected", opt.selected);
+          row.classList.toggle("is-active", isActive);
+          row.setAttribute("aria-selected", String(opt.selected));
+        }
+      });
+    } else {
+      const keepScroll =
+        tokenDropdownListMemo !== null &&
+        tokenDropdownListMemo.filterQuery === modal.dropdown.filterQuery;
+      const prevScrollTop = keepScroll ? listHost.scrollTop : 0;
+
+      listHost.innerHTML = "";
+      ddModel.options.forEach((opt, idx) => {
+        const row = document.createElement("div");
+        const isActive = isOpen && idx === ddModel.activeIndex;
+        const optId = `tok-mselect-opt-${idx}`;
+        row.id = optId;
+        row.dataset.idx = String(idx);
+        row.setAttribute("role", "option");
+
+        if (opt.kind === "create") {
+          row.className =
+            "mselect-option is-create" + (isActive ? " is-active" : "");
+          row.setAttribute("aria-selected", "false");
+          row.innerHTML = `
+            <span class="mselect-option-left">
+              <span class="mselect-create-plus" aria-hidden="true">${ICONS.plus}</span>
+              <span class="mselect-option-addr">新建并授权 ${escapeHtml(opt.label)}</span>
+            </span>
+            <span class="mselect-option-meta">保存时初始化空规则</span>
+          `;
+        } else {
+          row.className =
+            "mselect-option" +
+            (opt.selected ? " is-selected" : "") +
+            (isActive ? " is-active" : "");
+          row.setAttribute("aria-selected", String(opt.selected));
+          row.innerHTML = `
+            <span class="mselect-option-left">
+              <span class="mselect-check-box" aria-hidden="true">${ICONS.checkInline}</span>
+              <span class="mselect-option-addr">${escapeHtml(opt.address)}</span>
+            </span>
+            <span class="mselect-option-meta">${escapeHtml(opt.metaLabel)}</span>
+          `;
+        }
+
+        listHost.appendChild(row);
+      });
+
+      listHost.scrollTop = prevScrollTop;
+      if (isOpen) {
+        tokenDropdownListMemo = {
+          structureKey,
+          filterQuery: modal.dropdown.filterQuery,
         };
       }
-
-      listHost.appendChild(row);
-    });
+    }
 
     if (isOpen && ddModel.activeIndex >= 0) {
       searchInput.setAttribute(
@@ -2135,9 +2185,10 @@ function renderTokenModalContent(
 }
 
 function renderMessageModalContent(
-  m: InboxMessage,
+  modal: Extract<AppState["primaryModal"], { tag: "message" }>["modal"],
   actions: UiActions,
 ): void {
+  const m = modal.snapshot;
   $("msg-modal-title").textContent = m.subject || "(无主题)";
   $("msg-modal-meta").innerHTML = `
     <span class="msg-meta-key">发件人</span>
@@ -2151,7 +2202,7 @@ function renderMessageModalContent(
   const codesBox = $("msg-modal-codes");
   if (Array.isArray(m.codes) && m.codes.length > 0) {
     codesBox.hidden = false;
-    codesBox.innerHTML = `<span class="field-label">提取出的验证码</span>`;
+    codesBox.innerHTML = `<span class="field-label">验证码</span>`;
     const bar = document.createElement("div");
     bar.className = "extracted-bar";
     for (const c of m.codes) {
@@ -2170,33 +2221,37 @@ function renderMessageModalContent(
     codesBox.innerHTML = "";
   }
 
-  const linksBox = $("msg-modal-links");
-  if (Array.isArray(m.links) && m.links.length > 0) {
-    linksBox.hidden = false;
-    linksBox.innerHTML = `<span class="field-label tabular">提取出的链接 (${m.links.length})</span>`;
-    const list = document.createElement("div");
-    list.className = "msg-links-list";
-    for (const lk of m.links) {
-      const row = document.createElement("div");
-      row.className = "msg-link-row";
-      const code = document.createElement("code");
-      code.className = "code-pill";
-      code.textContent = lk;
-      const cbtn = document.createElement("button");
-      cbtn.type = "button";
-      cbtn.className = "btn btn-secondary btn-sm";
-      cbtn.innerHTML = `${ICONS.copy}<span>复制</span>`;
-      cbtn.onclick = () => actions.onCopy(lk, "已复制链接");
-      row.append(code, cbtn);
-      list.appendChild(row);
-    }
-    linksBox.appendChild(list);
-  } else {
-    linksBox.hidden = true;
-    linksBox.innerHTML = "";
-  }
+  const hasHtml = Boolean(m.html && m.html.trim().length > 0);
+  const showHtml = hasHtml && modal.viewMode === "html";
 
-  $("msg-modal-body").textContent = m.text || "(无纯文本正文)";
+  const viewTabs = $("msg-modal-view-tabs");
+  viewTabs.hidden = !hasHtml;
+  const htmlBtn = $<HTMLButtonElement>("msg-view-html");
+  const textBtn = $<HTMLButtonElement>("msg-view-text");
+  htmlBtn.classList.toggle("is-active", showHtml);
+  htmlBtn.setAttribute("aria-pressed", String(showHtml));
+  textBtn.classList.toggle("is-active", !showHtml);
+  textBtn.setAttribute("aria-pressed", String(!showHtml));
+
+  $("msg-modal-body-label").textContent =
+    hasHtml && !showHtml ? "纯文本正文" : "邮件内容";
+
+  const htmlWrap = $("msg-modal-html-wrap");
+  const iframe = $<HTMLIFrameElement>("msg-modal-iframe");
+  const plainBody = $("msg-modal-body");
+
+  if (showHtml) {
+    htmlWrap.hidden = false;
+    plainBody.hidden = true;
+    if (renderedIframeMessageId !== m.id) {
+      iframe.srcdoc = buildEmailPreviewSrcdoc(m.html!);
+      renderedIframeMessageId = m.id;
+    }
+  } else {
+    htmlWrap.hidden = true;
+    plainBody.hidden = false;
+    renderPlainTextWithLinks(plainBody, m.text || "");
+  }
 }
 
 function renderConfirmModal(confirm: AppState["confirmDialog"]): void {

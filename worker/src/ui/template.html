@@ -618,10 +618,24 @@
         </div>
         <div class="msg-meta-grid" id="msg-modal-meta"></div>
         <div class="msg-section" id="msg-modal-codes" hidden></div>
-        <div class="msg-section" id="msg-modal-links" hidden></div>
-        <div class="field">
-          <span class="field-label">纯文本正文</span>
-          <pre class="msg-pre" id="msg-modal-body"></pre>
+        <div class="field msg-body-field">
+          <div class="msg-body-header">
+            <span class="field-label" id="msg-modal-body-label">邮件内容</span>
+            <div class="msg-view-tabs" id="msg-modal-view-tabs" role="group" aria-label="邮件正文视图切换" hidden>
+              <button type="button" class="msg-view-tab is-active" id="msg-view-html" aria-pressed="true">渲染视图</button>
+              <button type="button" class="msg-view-tab" id="msg-view-text" aria-pressed="false">纯文本</button>
+            </div>
+          </div>
+          <div class="msg-render-wrap" id="msg-modal-html-wrap" hidden>
+            <iframe
+              id="msg-modal-iframe"
+              class="msg-render-frame"
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              referrerpolicy="no-referrer"
+              title="邮件正文渲染预览"
+            ></iframe>
+          </div>
+          <div class="msg-plain-body" id="msg-modal-body" hidden></div>
         </div>
       </div>
     </div>

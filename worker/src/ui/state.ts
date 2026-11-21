@@ -435,6 +435,7 @@ export type AppEvent =
   | { type: "WATCH_MODAL_SUBMIT_ERR"; instanceId: number; message: string }
   | { type: "WATCH_MODAL_SUBMIT_OK"; instanceId: number; watch: WatchSlot }
   | { type: "MESSAGE_MODAL_OPEN"; message: InboxMessage }
+  | { type: "MESSAGE_MODAL_VIEW_MODE_SET"; viewMode: "html" | "text" }
   | { type: "MESSAGE_MODAL_CLOSE" }
   // SM-8: Logs Slice
   | { type: "LOGS_LOAD_START"; requestId: number }
@@ -2279,7 +2280,10 @@ export function reduceAppState(state: AppState, event: AppEvent): AppState {
       };
     }
 
-    case "MESSAGE_MODAL_OPEN":
+    case "MESSAGE_MODAL_OPEN": {
+      const hasHtml = Boolean(
+        event.message.html && event.message.html.trim().length > 0,
+      );
       return {
         ...state,
         primaryModal: {
@@ -2287,9 +2291,31 @@ export function reduceAppState(state: AppState, event: AppEvent): AppState {
           modal: {
             messageId: event.message.id,
             snapshot: event.message,
+            viewMode: hasHtml ? "html" : "text",
           },
         },
       };
+    }
+
+    case "MESSAGE_MODAL_VIEW_MODE_SET": {
+      if (state.primaryModal.tag !== "message") return state;
+      const m = state.primaryModal.modal;
+      const hasHtml = Boolean(
+        m.snapshot.html && m.snapshot.html.trim().length > 0,
+      );
+      if (event.viewMode === "html" && !hasHtml) return state;
+      if (m.viewMode === event.viewMode) return state;
+      return {
+        ...state,
+        primaryModal: {
+          tag: "message",
+          modal: {
+            ...m,
+            viewMode: event.viewMode,
+          },
+        },
+      };
+    }
 
     case "MESSAGE_MODAL_CLOSE":
       if (state.primaryModal.tag !== "message") return state;

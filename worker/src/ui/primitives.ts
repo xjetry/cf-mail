@@ -497,3 +497,90 @@ export function bindSafeBackdropDismiss(
     pointerStartedOnBackdrop = false;
   });
 }
+
+/* ==========================================================================
+   Safe Real-Email HTML Srcdoc Builder & Plain-Text Link Renderer
+   ========================================================================== */
+const EMAIL_PREVIEW_HEAD_INJECT =
+  `<meta charset="utf-8">` +
+  `<meta name="referrer" content="no-referrer">` +
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:;">` +
+  `<base target="_blank">` +
+  `<style>` +
+  `html,body{background-color:#ffffff;color:#1f2937;}` +
+  `body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6;overflow-wrap:break-word;}` +
+  `img{max-width:100%;height:auto;}` +
+  `table{max-width:100%;}` +
+  `pre{white-space:pre-wrap;overflow-wrap:anywhere;}` +
+  `</style>`;
+
+/**
+ * Sanitizes raw HTML email content for isolated <iframe sandbox="allow-popups allow-popups-to-escape-sandbox"> srcdoc rendering.
+ * Strips active elements/meta-refresh/base tags and ensures all links open in a new tab with no referrer leakage.
+ */
+export function buildEmailPreviewSrcdoc(rawHtml: string): string {
+  const cleaned = String(rawHtml ?? "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<script\b[\s\S]*$/gi, "")
+    .replace(/<(iframe|object|embed|applet)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(iframe|object|embed|applet)\b[^>]*\/?>/gi, "")
+    .replace(
+      /<meta\b[^>]*http-equiv\s*=\s*(?:"[^"]*refresh[^"]*"|'[^']*refresh[^']*'|[^\s>]*refresh[^\s>]*)[^>]*>/gi,
+      "",
+    )
+    .replace(/<base\b[^>]*>/gi, "")
+    .replace(
+      /(<a\b[^>]*?)\s+target\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+      "$1",
+    );
+
+  if (/<head\b[^>]*>/i.test(cleaned)) {
+    return cleaned.replace(
+      /<head\b[^>]*>/i,
+      (match) => `${match}${EMAIL_PREVIEW_HEAD_INJECT}`,
+    );
+  }
+  if (/<html\b[^>]*>/i.test(cleaned)) {
+    return cleaned.replace(
+      /<html\b[^>]*>/i,
+      (match) => `${match}<head>${EMAIL_PREVIEW_HEAD_INJECT}</head>`,
+    );
+  }
+  if (/<body\b[^>]*>/i.test(cleaned)) {
+    return `<!doctype html><html><head>${EMAIL_PREVIEW_HEAD_INJECT}</head>${cleaned}</html>`;
+  }
+  return `<!doctype html><html><head>${EMAIL_PREVIEW_HEAD_INJECT}</head><body>${cleaned}</body></html>`;
+}
+
+/**
+ * Safely renders plain-text email content into a container with clickable https/http links.
+ */
+export function renderPlainTextWithLinks(
+  container: HTMLElement,
+  text: string,
+): void {
+  container.textContent = "";
+  const content = text || "(无正文内容)";
+  const urlRe = /https?:\/\/[^\s<>"'`)\]]+/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlRe.exec(content)) !== null) {
+    const start = match.index;
+    const rawUrl = match[0].replace(/[.,;:!?]+$/, "");
+    if (start > lastIndex) {
+      container.appendChild(
+        document.createTextNode(content.slice(lastIndex, start)),
+      );
+    }
+    const a = document.createElement("a");
+    a.href = rawUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = rawUrl;
+    container.appendChild(a);
+    lastIndex = start + rawUrl.length;
+  }
+  if (lastIndex < content.length) {
+    container.appendChild(document.createTextNode(content.slice(lastIndex)));
+  }
+}
